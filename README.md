@@ -9,10 +9,13 @@ npm install
 npm run dev
 ```
 
+Copy `.env.example` to `.env.local` and set `VITE_MAPBOX_TOKEN` before starting. The local workspace is already configured; `.env.local` is ignored by Git.
+
 Open the URL printed by Vite. Search a supported US city and state. Vite proxies the NPPES request because that federal endpoint does not permit cross-origin browser calls; no response data is altered or stored. The app retrieves current records from:
 
 - CMS NPPES NPI Registry API — provider identity, specialty, practice location, and record recency
 - ClinicalTrials.gov API v2 — recruiting local cancer studies
+- Mapbox Geocoding API + Mapbox GL — real provider-address coordinates and interactive territory map
 - Tempus official xT CDx product page — product capability used in the meeting brief
 
 No source records are mocked or stored in the repository. If either live API fails, the app shows an error rather than substituting fabricated data.

@@ -1,134 +1,59 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpRight, BadgeCheck, BookOpen, ChevronDown, CircleAlert, ExternalLink, FileCheck2, FlaskConical, MapPin, RefreshCw, Search, ShieldCheck, Sparkles, Stethoscope, Target, Users } from 'lucide-react';
-import { fetchProviders, fetchTrials } from './api';
-import type { Provider, RankedProvider, Study } from './types';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import mapboxgl from 'mapbox-gl';
+import 'mapbox-gl/dist/mapbox-gl.css';
+import { Check, ChevronDown, CircleAlert, ExternalLink, MapPin, Search, ShieldCheck, Sparkles } from 'lucide-react';
+import { fetchProviders, fetchTrials, geocodeProviders, MAPBOX_TOKEN } from './api';
+import type { Provider, ProviderPoint, RankedProvider, Study } from './types';
 
 const TEMPUS_SOURCE = 'https://www.tempus.com/solutions/xt-cdx/';
 const NPI_SOURCE = 'https://npiregistry.cms.hhs.gov/';
-const CTG_SOURCE = 'https://clinicaltrials.gov/';
+const states: Record<string,string> = { IL:'Illinois', NY:'New York', CA:'California', TX:'Texas', MA:'Massachusetts', FL:'Florida', PA:'Pennsylvania', WA:'Washington' };
+const name = (p: Provider) => `${p.basic.first_name ?? ''} ${p.basic.last_name ?? ''}${p.basic.credential ? `, ${p.basic.credential}` : ''}`.trim();
+const address = (p: Provider) => p.addresses.find(a => a.address_purpose === 'LOCATION') ?? p.addresses[0];
 
-const stateNames: Record<string, string> = { IL: 'Illinois', NY: 'New York', CA: 'California', TX: 'Texas', MA: 'Massachusetts', FL: 'Florida', PA: 'Pennsylvania', WA: 'Washington' };
-
-function providerName(p: Provider) {
-  const b = p.basic;
-  return `${b.first_name ?? ''} ${b.last_name ?? ''}${b.credential ? `, ${b.credential}` : ''}`.trim();
-}
-
-function practiceAddress(p: Provider) {
-  return p.addresses.find(a => a.address_purpose === 'LOCATION') ?? p.addresses[0];
-}
-
-function rankProvider(p: Provider, trials: Study[]): RankedProvider {
-  const address = practiceAddress(p);
-  const cityTrials = trials.filter(t => t.protocolSection.contactsLocationsModule?.locations?.some(l => l.city?.toLowerCase() === address?.city?.toLowerCase()));
-  const oncology = p.taxonomies.some(t => /oncology/i.test(t.desc));
-  const exactFit = oncology ? 100 : 40;
-  const trialSignal = Math.min(100, cityTrials.length * 14);
-  const lastUpdated = p.basic.last_updated ? new Date(p.basic.last_updated).getTime() : 0;
-  const monthsOld = lastUpdated ? (Date.now() - lastUpdated) / 2629800000 : 120;
-  const recency = Math.max(10, Math.round(100 - monthsOld * 1.5));
-  const score = Math.round(exactFit * .45 + trialSignal * .40 + recency * .15);
-  return { ...p, score, exactFit, trialSignal, recency, cityTrials };
+function rank(p: Provider, trials: Study[]): RankedProvider {
+  const local = trials.filter(t => t.protocolSection.contactsLocationsModule?.locations?.some(l => l.city?.toLowerCase() === address(p)?.city?.toLowerCase()));
+  const exactFit = p.taxonomies.some(t => /oncology/i.test(t.desc)) ? 100 : 40;
+  const trialSignal = Math.min(100, local.length * 14);
+  const updated = p.basic.last_updated ? new Date(p.basic.last_updated).getTime() : 0;
+  const recency = Math.max(10, Math.round(100 - (updated ? (Date.now() - updated) / 2629800000 : 120) * 1.5));
+  return { ...p, exactFit, trialSignal, recency, cityTrials: local, score: Math.round(exactFit*.45 + trialSignal*.40 + recency*.15) };
 }
 
 export function App() {
-  const [city, setCity] = useState('Chicago');
-  const [state, setState] = useState('IL');
-  const [query, setQuery] = useState({ city: 'Chicago', state: 'IL' });
-  const [providers, setProviders] = useState<Provider[]>([]);
-  const [trials, setTrials] = useState<Study[]>([]);
-  const [selectedNpi, setSelectedNpi] = useState('');
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [tab, setTab] = useState<'brief' | 'evidence'>('brief');
+  const [city,setCity] = useState('Chicago'); const [state,setState] = useState('IL');
+  const [query,setQuery] = useState({city:'Chicago',state:'IL'}); const [providers,setProviders] = useState<Provider[]>([]);
+  const [trials,setTrials] = useState<Study[]>([]); const [points,setPoints] = useState<ProviderPoint[]>([]);
+  const [selectedNpi,setSelectedNpi] = useState(''); const [loading,setLoading] = useState(true); const [error,setError] = useState('');
+  const ranked = useMemo(() => providers.map(p=>rank(p,trials)).sort((a,b)=>b.score-a.score),[providers,trials]);
+  const selected = ranked.find(p=>p.number===selectedNpi) ?? ranked[0];
 
-  async function load() {
-    setLoading(true); setError('');
-    try {
-      const [p, t] = await Promise.all([fetchProviders(query.city, query.state), fetchTrials(query.city, query.state)]);
-      setProviders(p); setTrials(t); setSelectedNpi(p[0]?.number ?? '');
-    } catch (e) { setError(e instanceof Error ? e.message : 'Unable to load public data.'); }
-    finally { setLoading(false); }
-  }
-  useEffect(() => { load(); }, [query]);
-
-  const ranked = useMemo(() => providers.map(p => rankProvider(p, trials)).sort((a, b) => b.score - a.score), [providers, trials]);
-  const selected = ranked.find(p => p.number === selectedNpi) ?? ranked[0];
-  const topTrial = selected?.cityTrials[0];
-  const trialTitle = topTrial?.protocolSection.identificationModule.briefTitle;
-
-  function submit(e: React.FormEvent) { e.preventDefault(); setQuery({ city: city.trim(), state }); }
-
-  return <div className="app-shell">
-    <aside className="sidebar">
-      <div className="brand"><div className="brand-mark">S</div><span>Signal</span></div>
-      <nav>
-        <a className="active"><Target size={18}/> Territory</a>
-        <a><Users size={18}/> Providers</a>
-        <a><FlaskConical size={18}/> Clinical signals</a>
-        <a><BookOpen size={18}/> Knowledge</a>
-      </nav>
-      <div className="sidebar-foot"><div className="live-dot"/><div><strong>Public data live</strong><span>NPPES + ClinicalTrials.gov</span></div></div>
-    </aside>
-
+  async function load(){ setLoading(true); setError(''); setPoints([]); try { const [p,t]=await Promise.all([fetchProviders(query.city,query.state),fetchTrials(query.city,query.state)]); setProviders(p);setTrials(t);setSelectedNpi(p[0]?.number??''); setPoints(await geocodeProviders(p)); } catch(e){setError(e instanceof Error?e.message:'Public data unavailable.')} finally{setLoading(false)} }
+  useEffect(()=>{load()},[query]);
+  return <div className="shell">
+    <header className="topbar"><a className="logo" href="#"><span>t</span> tempus<span className="product">signal</span></a><div className="source-status"><i/> Live public data <b>•</b> NPPES + ClinicalTrials.gov</div><button className="user">AM</button></header>
     <main>
-      <header>
-        <div><p className="eyebrow">Territory intelligence</p><h1>Good morning, Alex.</h1><p className="subhead">Here’s where your attention can make the biggest difference today.</p></div>
-        <button className="avatar" aria-label="Profile">AM</button>
-      </header>
-
-      <form className="market-search" onSubmit={submit}>
-        <MapPin size={18}/><input value={city} onChange={e => setCity(e.target.value)} aria-label="City" placeholder="City"/>
-        <div className="select-wrap"><select value={state} onChange={e => setState(e.target.value)} aria-label="State">{Object.entries(stateNames).map(([code,name]) => <option key={code} value={code}>{name}</option>)}</select><ChevronDown size={15}/></div>
-        <button type="submit"><Search size={17}/> Explore market</button>
-      </form>
-
-      {error ? <div className="error"><CircleAlert/><div><strong>Live data unavailable</strong><p>{error}</p></div><button onClick={load}>Try again</button></div> : <>
-        <section className="stat-row">
-          <div className="stat hero-stat"><span>Market pulse</span><strong>{loading ? '—' : ranked.length}</strong><p>oncology providers returned</p><Users/></div>
-          <div className="stat"><span>Recruiting now</span><strong>{loading ? '—' : trials.length}</strong><p>local cancer trials</p><FlaskConical/></div>
-          <div className="stat"><span>Priority signal</span><strong>{loading ? '—' : ranked[0]?.score ?? 0}<small>/100</small></strong><p>top opportunity score</p><ArrowUpRight/></div>
+      <section className="hero"><div><span className="kicker">Territory workspace</span><h1>Find the right conversation.</h1><p>Real provider and clinical-trial signals, distilled into one clear next step.</p></div>
+        <form className="search" onSubmit={e=>{e.preventDefault();setQuery({city:city.trim(),state})}}><Search/><input aria-label="City" value={city} onChange={e=>setCity(e.target.value)} /><div><select aria-label="State" value={state} onChange={e=>setState(e.target.value)}>{Object.entries(states).map(([v,l])=><option value={v} key={v}>{l}</option>)}</select><ChevronDown/></div><button>Search market</button></form>
+      </section>
+      {error ? <div className="error"><CircleAlert/><div><b>Couldn’t load this market</b><span>{error}</span></div><button onClick={load}>Try again</button></div> : <>
+        <section className="pulse"><div><b>{loading?'—':ranked.length}</b><span>oncology providers</span></div><div><b>{loading?'—':trials.length}</b><span>recruiting trials</span></div><div><b>{loading?'—':points.length}</b><span>mapped locations</span></div><p><Sparkles/> Ranked with specialty fit, local trial activity, and record recency. <button title="45% specialty fit, 40% trial activity, 15% record recency">How it works</button></p></section>
+        <section className="workspace">
+          <div className="map-wrap"><TerritoryMap points={points} providers={ranked} selectedNpi={selected?.number} onSelect={setSelectedNpi}/>{loading&&<div className="map-loading"><span/><b>Building your territory view…</b><small>Matching real provider addresses</small></div>}<div className="map-label"><MapPin/> {query.city}, {query.state}<span>{points.length} locations</span></div></div>
+          <aside className="rank-panel"><div className="panel-title"><div><span>Priority list</span><h2>Who to call next</h2></div><b>{ranked.length}</b></div><div className="list">{loading?[1,2,3,4].map(i=><div className="row skeleton" key={i}/>):ranked.slice(0,6).map((p,i)=><button key={p.number} className={`row ${selected?.number===p.number?'active':''}`} onClick={()=>setSelectedNpi(p.number)}><span className="number">{i+1}</span><span className="person"><b>{name(p)}</b><small>{p.taxonomies.find(t=>t.primary)?.desc??'Oncology'} · {address(p)?.city}</small></span><span className="signal">{p.score}<small>signal</small></span></button>)}</div></aside>
         </section>
-
-        <div className="content-grid">
-          <section className="provider-panel">
-            <div className="section-head"><div><p className="eyebrow">Recommended outreach</p><h2>Provider priority</h2></div><span className="fresh"><RefreshCw size={13}/> Live results</span></div>
-            <div className="formula"><Sparkles size={15}/><span><b>Explainable rank:</b> 45% specialty fit · 40% local trial signal · 15% record recency</span></div>
-            <div className="provider-list">
-              {loading ? [1,2,3,4].map(i => <div className="provider-row skeleton" key={i}/>) : ranked.slice(0,8).map((p, i) => {
-                const address = practiceAddress(p); const active = p.number === selected?.number;
-                return <button className={`provider-row ${active ? 'selected' : ''}`} key={p.number} onClick={() => setSelectedNpi(p.number)}>
-                  <span className="rank">{String(i+1).padStart(2,'0')}</span>
-                  <span className="provider-main"><strong>{providerName(p)}</strong><span>{p.taxonomies.find(t => t.primary)?.desc ?? p.taxonomies[0]?.desc}</span><small>{address?.city}, {address?.state} · NPI {p.number}</small></span>
-                  <span className="score"><b>{p.score}</b><small>signal</small></span>
-                </button>})}
-            </div>
-          </section>
-
-          {selected && <section className="brief-panel">
-            <div className="brief-top"><div className="monogram">{selected.basic.first_name?.[0]}{selected.basic.last_name?.[0]}</div><div><p className="eyebrow">Today’s top brief</p><h2>{providerName(selected)}</h2><span><MapPin size={13}/>{practiceAddress(selected)?.city}, {practiceAddress(selected)?.state}</span></div><a href={`${NPI_SOURCE}provider-view/${selected.number}`} target="_blank" rel="noreferrer" title="View NPI record"><ExternalLink size={17}/></a></div>
-            <div className="tabs"><button className={tab==='brief'?'active':''} onClick={()=>setTab('brief')}>Meeting brief</button><button className={tab==='evidence'?'active':''} onClick={()=>setTab('evidence')}>Evidence</button></div>
-            {tab === 'brief' ? <div className="brief-body">
-              <div className="insight-card"><div className="icon blue"><Target size={17}/></div><div><label>WHY THIS PROVIDER</label><p>Oncology specialty match with <b>{selected.cityTrials.length} recruiting cancer {selected.cityTrials.length === 1 ? 'trial' : 'trials'}</b> in the same city. This is a territory signal—not an estimate of patient volume.</p></div></div>
-              <div className="insight-card featured"><div className="icon green"><Sparkles size={17}/></div><div><label>30-SECOND OPENING <span>SYNTHESIZED</span></label><p>“Dr. {selected.basic.last_name}, I noticed {trialTitle ? `the local research community is recruiting for ${trialTitle}` : `${practiceAddress(selected)?.city} has active recruiting oncology studies`}. Tempus xT CDx offers FDA-approved, 648-gene tissue-based profiling for malignant solid tumors. I’d value 15 minutes to understand how comprehensive profiling fits your current workflow and where evidence gaps remain.”</p><div className="guardrail"><ShieldCheck size={14}/> Review before use · no treatment recommendation</div></div></div>
-              <div className="insight-card"><div className="icon amber"><Stethoscope size={17}/></div><div><label>OBJECTION PREP</label><p><b>If asked about clinical scope:</b> “xT CDx is an FDA-approved 648-gene tissue-based NGS test for molecular profiling of malignant solid tumors, with colorectal cancer companion diagnostic claims.”</p><a href={TEMPUS_SOURCE} target="_blank" rel="noreferrer">Tempus xT CDx source <ExternalLink size={12}/></a></div></div>
-            </div> : <Evidence selected={selected} />}
-          </section>}
-        </div>
+        {selected&&<Brief provider={selected}/>} 
       </>}
-      <footer><span><FileCheck2 size={14}/> No synthetic source records</span><span>Prototype for decision support · Not for clinical use</span></footer>
+      <footer><ShieldCheck/> Source records are never synthesized <span>Decision support only · Not for clinical use</span></footer>
     </main>
-  </div>;
+  </div>
 }
 
-function Evidence({selected}:{selected: RankedProvider}) {
-  const address = practiceAddress(selected);
-  return <div className="evidence-list">
-    <div><BadgeCheck/><span><b>Provider identity & specialty</b><small>NPPES NPI Registry · NPI {selected.number}</small></span><a href={`${NPI_SOURCE}provider-view/${selected.number}`} target="_blank" rel="noreferrer"><ExternalLink/></a></div>
-    <div><FlaskConical/><span><b>{selected.cityTrials.length} recruiting local cancer studies</b><small>ClinicalTrials.gov API · {address?.city}, {address?.state}</small></span><a href={CTG_SOURCE} target="_blank" rel="noreferrer"><ExternalLink/></a></div>
-    <div><BookOpen/><span><b>xT CDx: FDA-approved 648-gene tissue test</b><small>Tempus official product page</small></span><a href={TEMPUS_SOURCE} target="_blank" rel="noreferrer"><ExternalLink/></a></div>
-    <div className="score-breakdown"><p>Score breakdown</p><ScoreLine label="Specialty fit" value={selected.exactFit}/><ScoreLine label="Local trial signal" value={selected.trialSignal}/><ScoreLine label="Record recency" value={selected.recency}/></div>
-  </div>;
+function TerritoryMap({points,providers,selectedNpi,onSelect}:{points:ProviderPoint[];providers:RankedProvider[];selectedNpi?:string;onSelect:(npi:string)=>void}){
+  const node=useRef<HTMLDivElement>(null); const map=useRef<mapboxgl.Map|null>(null); const markers=useRef<mapboxgl.Marker[]>([]);
+  useEffect(()=>{if(!node.current||map.current)return; mapboxgl.accessToken=MAPBOX_TOKEN;map.current=new mapboxgl.Map({container:node.current,style:'mapbox://styles/mapbox/light-v11',center:[-87.6298,41.8781],zoom:10.2,attributionControl:false});map.current.addControl(new mapboxgl.NavigationControl({showCompass:false}),'bottom-right');return()=>{map.current?.remove();map.current=null}},[]);
+  useEffect(()=>{if(!map.current||!points.length)return;markers.current.forEach(m=>m.remove());const bounds=new mapboxgl.LngLatBounds();markers.current=points.map(point=>{const p=providers.find(x=>x.number===point.npi);const el=document.createElement('button');el.className=`map-marker ${point.npi===selectedNpi?'active':''}`;el.innerHTML=`<span>${p?.score??''}</span>`;el.setAttribute('aria-label',p?name(p):'Provider');el.onclick=()=>onSelect(point.npi);bounds.extend([point.longitude,point.latitude]);return new mapboxgl.Marker({element:el}).setLngLat([point.longitude,point.latitude]).addTo(map.current!)});map.current.fitBounds(bounds,{padding:70,maxZoom:13,duration:700})},[points,providers,selectedNpi,onSelect]);
+  return <div ref={node} className="map"/>;
 }
 
-function ScoreLine({label,value}:{label:string,value:number}) { return <div className="score-line"><span>{label}</span><div><i style={{width:`${value}%`}}/></div><b>{value}</b></div>; }
+function Brief({provider:p}:{provider:RankedProvider}){const trial=p.cityTrials[0]?.protocolSection.identificationModule.briefTitle;return <section className="brief"><div className="brief-profile"><span className="initials">{p.basic.first_name?.[0]}{p.basic.last_name?.[0]}</span><div><small>Recommended conversation</small><h2>{name(p)}</h2><p><MapPin/> {address(p)?.address_1}, {address(p)?.city}</p></div><a href={`${NPI_SOURCE}provider-view/${p.number}`} target="_blank" rel="noreferrer">NPI record <ExternalLink/></a></div><div className="brief-content"><article className="next-step"><span><Sparkles/> Suggested opener</span><p>“Dr. {p.basic.last_name}, I noticed {trial?`local recruitment for ${trial}`:`active oncology research in ${address(p)?.city}`}. Tempus xT CDx offers FDA-approved 648-gene tissue-based profiling for malignant solid tumors. Could we spend 15 minutes on where comprehensive profiling fits your workflow?”</p><small><ShieldCheck/> AI-drafted from cited facts · review before use</small></article><div className="quick-facts"><h3>Why now</h3><div><Check/><span><b>{p.cityTrials.length} recruiting cancer trials</b><small>Same-city ClinicalTrials.gov records</small></span></div><div><Check/><span><b>648-gene FDA-approved test</b><small>Official Tempus xT CDx product page</small></span></div><a href={TEMPUS_SOURCE} target="_blank" rel="noreferrer">View supporting evidence <ExternalLink/></a></div></div></section>}
