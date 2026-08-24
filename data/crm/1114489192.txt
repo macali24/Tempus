@@ -1,0 +1,10 @@
+---
+npi: 1114489192
+physician: Bilal Anouti
+last_contact: 2026-08-08
+rep: J. Doe
+---
+
+Wants peer-reviewed and regulatory evidence behind product claims. Asked directly whether the assay is FDA approved or LDT. Do not overstate.
+
+Interest noted: melanoma surveillance and clinical trials.

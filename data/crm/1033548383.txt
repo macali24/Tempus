@@ -1,0 +1,10 @@
+---
+npi: 1033548383
+physician: Yasmin Abaza
+last_contact: 2026-08-03
+rep: J. Doe
+---
+
+Wants clarity on specimen requirements before changing the current workflow. Concerned about repeat biopsies, several of her patients have insufficient tissue.
+
+Interest noted: hematologic malignancies and molecular stratification.

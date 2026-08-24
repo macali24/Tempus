@@ -1,0 +1,10 @@
+---
+npi: 1285611954
+physician: Gregory Abel
+last_contact: 2026-08-11
+rep: J. Doe
+---
+
+Long-standing academic. Will not engage with marketing language. Asked for the labeled indication verbatim and nothing else.
+
+Interest noted: pediatric and adolescent oncology outcomes.

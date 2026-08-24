@@ -1,124 +1,729 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import mapboxgl from 'mapbox-gl';
-import 'mapbox-gl/dist/mapbox-gl.css';
-import { BookOpen, Check, ChevronDown, CircleAlert, ExternalLink, FileWarning, LocateFixed, MapPin, RotateCcw, Search, ShieldCheck, Sparkles, X } from 'lucide-react';
-import { fetchProviders, fetchPublications, fetchTrials, fetchUtilization, fetchVerifiedPhotos, geocodeProviders, MAPBOX_TOKEN, sendSlackAlert } from './api';
-import { retrieveEvidence, simulatedCrm } from './data';
-import { isSlackEligible, nextBestAction, recordFeedback, trainShadowModel } from './phase2';
-import type { CmsUtilization, Provider, ProviderPhoto, ProviderPoint, Publication, RankedProvider, Study } from './types';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
+import { AlertTriangle, ArrowRight, Building2, FilterX, Info, LocateFixed, MapPin, Phone, Search, User, X } from 'lucide-react';
+import { fetchProviders, fetchTrials, fetchUtilization, geocodeProviders, type TrialResult } from './api';
+import { fetchPaymentsForAll, type PaymentSummary } from './lib/openpayments';
+import { rankProviders, WEIGHTS, WEIGHT_LABEL, type ScoredProvider } from './lib/ranking';
+import { buildAccounts } from './lib/accounts';
+import { marketProviders } from './lib/market';
+import { applyFilters, activeFilterCount, filterOptions, NO_FILTERS, type Filters } from './lib/filters';
+import { availableProviders, type ProviderId } from './lib/llm';
+import { matchTrialsToInterest } from './lib/triggers';
+import { displayName, practiceAddress, practicePhone, specialty } from './lib/format';
+import { TrustPanel } from './components/TrustPanel';
+import { BriefPanel } from './components/BriefPanel';
+import { NO_AUDIT, type AuditSummary } from './components/AuditCard';
+import { MethodPanel } from './components/MethodPanel';
+import { AccountPanel } from './components/AccountPanel';
+import { Headshot, HeadshotCredit } from './components/Headshot';
+import type { CmsUtilization, Provider, ProviderPoint } from './types';
 
-const TEMPUS_SOURCE = 'https://www.tempus.com/solutions/xt-cdx/';
-const NPI_SOURCE = 'https://npiregistry.cms.hhs.gov/';
-const states: Record<string,string> = { IL:'Illinois', NY:'New York', CA:'California', TX:'Texas', MA:'Massachusetts', FL:'Florida', PA:'Pennsylvania', WA:'Washington' };
-const name = (p: Provider) => `${p.basic.first_name ?? ''} ${p.basic.last_name ?? ''}${p.basic.credential ? `, ${p.basic.credential}` : ''}`.trim();
-const address = (p: Provider) => p.addresses.find(a => a.address_purpose === 'LOCATION') ?? p.addresses[0];
+// Mapbox is ~1.2 MB of the bundle and the map is spatial context, not the
+// critical path; the ranked list and the brief render without waiting for it.
+const TerritoryMap = lazy(() =>
+  import('./components/TerritoryMap').then(m => ({ default: m.TerritoryMap })),
+);
 
-function rank(p: Provider, trials: Study[], utilization: Record<string,CmsUtilization>, maxBeneficiaries: number): RankedProvider {
-  const local = trials.filter(t => t.protocolSection.contactsLocationsModule?.locations?.some(l => l.city?.toLowerCase() === address(p)?.city?.toLowerCase()));
-  const exactFit = p.taxonomies.some(t => /oncology/i.test(t.desc)) ? 100 : 40;
-  const trialSignal = Math.min(100, local.length * 8);
-  const updated = p.basic.last_updated ? new Date(p.basic.last_updated).getTime() : 0;
-  const recency = Math.max(10, Math.round(100 - (updated ? (Date.now() - updated) / 2629800000 : 120) * 1.5));
-  const cms=utilization[p.number]; const opportunity=cms&&maxBeneficiaries?Math.round(Math.log1p(cms.beneficiaries)/Math.log1p(maxBeneficiaries)*100):0;
-  const crm=simulatedCrm[p.number]; const engagement=crm?.engagement??0; const confidence=(cms?45:0)+(trials.length?25:0)+(p.basic.status==='A'?15:0)+(p.basic.last_updated?15:0);
-  const score=Math.round(opportunity*.40+trialSignal*.15+engagement*.15+recency*.15+confidence*.15);
-  return { ...p, score, opportunity, exactFit, trialSignal, engagement, recency, confidence, cityTrials:local, utilization:cms, crm };
-}
+const DEFAULT_MARKET = { city: 'Chicago', state: 'IL' } as const;
+
+/** Where the ranked list came from; shown, never inferred. */
+type Source = 'live' | 'demo' | 'none';
+type Mode = 'providers' | 'accounts';
+
 
 export function App() {
-  const [city,setCity] = useState('Chicago'); const [state,setState] = useState('IL');
-  const [query,setQuery] = useState({city:'Chicago',state:'IL'}); const [providers,setProviders] = useState<Provider[]>([]);
-  const [trials,setTrials] = useState<Study[]>([]); const [points,setPoints] = useState<ProviderPoint[]>([]);
-  const [utilization,setUtilization] = useState<Record<string,CmsUtilization>>({});
-  const [photos,setPhotos] = useState<Record<string,ProviderPhoto>>({});
-  const [profileOpen,setProfileOpen] = useState(false);
-  const [methodOpen,setMethodOpen] = useState(false);
-  const [enriching,setEnriching] = useState(true);const [scoreDeltas,setScoreDeltas]=useState<Record<string,number>>({});
-  const [selectedNpi,setSelectedNpi] = useState(''); const [loading,setLoading] = useState(true); const [error,setError] = useState('');
-  const ranked = useMemo(() => {const max=Math.max(...Object.values(utilization).map(item=>item.beneficiaries),1);return providers.map(p=>rank(p,trials,utilization,max)).sort((a,b)=>b.score-a.score)},[providers,trials,utilization]);
-  const selected = ranked.find(p=>p.number===selectedNpi) ?? ranked[0];
-  const hour = new Date().getHours();
-  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
+  const market = DEFAULT_MARKET;
 
-  async function load(){
-    setLoading(true); setEnriching(true); setError(''); setPoints([]); setPhotos({}); setUtilization({});
-    try {
-      const p = await fetchProviders(query.city,query.state);
-      setProviders(p); setSelectedNpi(''); setLoading(false);
-      const [trialResult, pointResult, photoResult, utilizationResult] = await Promise.allSettled([fetchTrials(query.city,query.state), geocodeProviders(p), fetchVerifiedPhotos(p), fetchUtilization(p)]);
-      setTrials(trialResult.status==='fulfilled'?trialResult.value:[]);
-      setPoints(pointResult.status==='fulfilled'?pointResult.value:[]);
-      setPhotos(photoResult.status==='fulfilled'?photoResult.value:{});
-      setUtilization(utilizationResult.status==='fulfilled'?utilizationResult.value:{});
-      setEnriching(false);
-    } catch(e){setProviders([]);setTrials([]);setError(e instanceof Error?e.message:'Public data unavailable.');setLoading(false);setEnriching(false)}
-  }
-  useEffect(()=>{load()},[query]);
-  useEffect(()=>{if(enriching||!ranked.length)return;const key=`territory-scores-${query.city.toLowerCase()}-${query.state}`;let previous:Record<string,number>={};try{previous=JSON.parse(localStorage.getItem(key)??'{}')}catch{previous={}};const current=Object.fromEntries(ranked.map(item=>[item.number,item.score]));setScoreDeltas(Object.fromEntries(ranked.map(item=>[item.number,previous[item.number]===undefined?0:item.score-previous[item.number]])));localStorage.setItem(key,JSON.stringify(current))},[enriching,ranked,query]);
-  useEffect(()=>{const close=(event:KeyboardEvent)=>{if(event.key==='Escape'){setProfileOpen(false);setMethodOpen(false)}};window.addEventListener('keydown',close);return()=>window.removeEventListener('keydown',close)},[]);
-  const chooseProvider=(npi:string)=>{setSelectedNpi(npi);setMethodOpen(false);setProfileOpen(true);requestAnimationFrame(()=>setTimeout(()=>document.getElementById('provider-details')?.scrollIntoView({behavior:'smooth',block:'start'}),40))};
-  return <div className="shell">
-    <header className="topbar"><div className="logo"><img src="/tempus-mark.png" alt="Tempus"/><span>tempus</span></div><button className="method-button" onClick={()=>{setProfileOpen(false);setMethodOpen(true);requestAnimationFrame(()=>setTimeout(()=>document.getElementById('methodology')?.scrollIntoView({behavior:'smooth',block:'start'}),40))}}><ShieldCheck/> Evidence & assumptions</button><div className="account"><span>John Doe<small>Territory manager</small></span><div className="user">JD</div></div></header>
-    <main>
-      <section className="hero"><div><h1>{greeting}, John.</h1><p>{loading ? `Loading ${query.city} territory…` : <><strong>{ranked.length}</strong> oncology providers · <strong>{trials.length}</strong> recruiting trials · top priority <strong>{ranked[0]?.score ?? 0}/100</strong></>}</p></div>
-        <form className="search" onSubmit={e=>{e.preventDefault();setProfileOpen(false);setMethodOpen(false);setQuery({city:city.trim(),state})}}><Search/><input aria-label="City" value={city} onChange={e=>setCity(e.target.value)} /><div><select aria-label="State" value={state} onChange={e=>setState(e.target.value)}>{Object.entries(states).map(([v,l])=><option value={v} key={v}>{l}</option>)}</select><ChevronDown/></div><button>Search market</button></form>
-      </section>
-      {error ? <div className="error"><CircleAlert/><div><b>Couldn’t load this market</b><span>{error}</span></div><button onClick={load}>Try again</button></div> : <>
-        <section className="workspace">
-          <div className="map-wrap"><TerritoryMap points={points} providers={ranked} selectedNpi={selectedNpi} onSelect={chooseProvider}/>{loading&&<div className="map-loading"><span/><b>Building your territory view…</b><small>Matching real provider addresses</small></div>}<div className="map-label"><MapPin/> {query.city}, {query.state}<span>{points.length} locations</span></div></div>
-          <aside className="rank-panel"><div className="panel-title"><div><span>Priority list</span><h2>Who to call next</h2></div><b>{ranked.length}</b></div><div className="list">{loading?[1,2,3,4].map(i=><div className="row skeleton" key={i}/>):ranked.slice(0,6).map((p,i)=><button key={p.number} className={`row ${selectedNpi===p.number?'active':''}`} onClick={()=>chooseProvider(p.number)}><span className="number">{i+1}</span><ProviderAvatar provider={p} photo={photos[p.number]}/><span className="person"><b>{name(p)}</b><small>{p.taxonomies.find(t=>t.primary)?.desc??'Oncology'} · {address(p)?.city}</small></span><span className="signal">{p.score}<small>signal</small></span></button>)}</div></aside>
-        </section>
-        {profileOpen&&selected&&<ProviderDrawer provider={selected} photo={photos[selected.number]} rankPosition={ranked.findIndex(item=>item.number===selected.number)+1} scoreDelta={scoreDeltas[selected.number]??0} onClose={()=>setProfileOpen(false)}/>}
-        {methodOpen&&<MethodologyDrawer onClose={()=>setMethodOpen(false)}/>}
-      </>}
-      <footer><ShieldCheck/> Source records are never synthesized <span>Decision support only · Not for clinical use</span></footer>
-    </main>
-  </div>
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [trials, setTrials] = useState<TrialResult>({ studies: [], total: 0 });
+  const [utilization, setUtilization] = useState<Record<string, CmsUtilization>>({});
+  const [payments, setPayments] = useState<Record<string, PaymentSummary>>({});
+  const [points, setPoints] = useState<ProviderPoint[]>([]);
+
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [source, setSource] = useState<Source>('live');
+  const [selectedNpi, setSelectedNpi] = useState('');
+  const [mode, setMode] = useState<Mode>('providers');
+  const [accountId, setAccountId] = useState('');
+  const [methodOpen, setMethodOpen] = useState(false);
+  const [filters, setFilters] = useState<Filters>(NO_FILTERS);
+  const [models, setModels] = useState<ProviderId[]>([]);
+  const [fitRequest, setFitRequest] = useState(0);
+  // Claim and source counts belong to the brief's pipeline but are read at the
+  // top of the page, so the brief reports them up rather than duplicating work.
+  const [audit, setAudit] = useState<AuditSummary>(NO_AUDIT);
+
+  const ranked = useMemo(
+    () =>
+      rankProviders({
+        providers,
+        trials: trials.studies,
+        trialTotal: trials.total,
+        utilization,
+        payments,
+      }),
+    [providers, trials, utilization, payments],
+  );
+  const visible = useMemo(() => applyFilters(ranked, filters), [ranked, filters]);
+  const options = useMemo(() => filterOptions(ranked), [ranked]);
+  const activeFilters = activeFilterCount(filters);
+  const selected = ranked.find(p => p.number === selectedNpi) ?? visible[0] ?? ranked[0];
+  const accounts = useMemo(() => buildAccounts(visible), [visible]);
+  const account = accounts.find(a => a.id === accountId);
+  // The account the currently selected physician belongs to, used to fill the
+  // context column with colleagues rather than whitespace.
+  const selectedAccount = selected ? accounts.find(a => a.providers.some(p => p.number === selected.number)) : undefined;
+  const sharedTheme = selectedAccount?.themes.find(t => t.count > 1);
+  const contested = ranked.filter(p => p.consensus.contested > 0).length;
+  const relevantTrials = selected
+    ? matchTrialsToInterest(selected.cityTrials, selected.crm?.interest).length
+    : 0;
+  const mapProviders = account?.providers ?? visible;
+  const mapProviderIds = new Set(mapProviders.map(provider => provider.number));
+  const mapPoints = points.filter(point => mapProviderIds.has(point.npi));
+
+  useEffect(() => {
+    availableProviders().then(setModels);
+  }, []);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      setLoading(true);
+      setError('');
+      setPoints([]);
+      setUtilization({});
+      setPayments({});
+      // The ingested CSV is the spine of the ranked list; NPPES is enrichment
+      // that makes it better, not a dependency that can take it away.
+      let found: Provider[];
+      let sourceKind: Source = 'live';
+      try {
+        found = await fetchProviders(market.city, market.state);
+      } catch (e) {
+        const fallback = marketProviders(market.city, market.state);
+        if (!fallback.length) {
+          if (!live) return;
+          setProviders([]);
+          setTrials({ studies: [], total: 0 });
+          setError(e instanceof Error ? e.message : 'Public data unavailable.');
+          setSource('none');
+          setLoading(false);
+          return;
+        }
+        found = fallback;
+        sourceKind = 'demo';
+      }
+
+      if (!live) return;
+      setProviders(found);
+      setSource(sourceKind);
+      setSelectedNpi('');
+      setLoading(false);
+
+      // Enrichment is best-effort and parallel: a failing source degrades one
+      // signal rather than the whole territory. allSettled never rejects, so
+      // there is no path here that can take the ranked list back down.
+      const [trialResult, utilizationResult, paymentResult, pointResult] = await Promise.allSettled([
+        fetchTrials(market.city, market.state),
+        fetchUtilization(found),
+        fetchPaymentsForAll(found.map(p => p.number).slice(0, 12)),
+        geocodeProviders(found),
+      ]);
+      if (!live) return;
+      setTrials(trialResult.status === 'fulfilled' ? trialResult.value : { studies: [], total: 0 });
+      setUtilization(utilizationResult.status === 'fulfilled' ? utilizationResult.value : {});
+      setPayments(paymentResult.status === 'fulfilled' ? paymentResult.value : {});
+      setPoints(pointResult.status === 'fulfilled' ? pointResult.value : []);
+    })();
+    return () => {
+      live = false;
+    };
+  }, [market]);
+
+  useEffect(() => { setAudit(NO_AUDIT); }, [selected?.number]);
+  const onAudit = useCallback((summary: AuditSummary) => setAudit(summary), []);
+
+  const openProvider = useCallback((npi: string) => {
+    setAccountId('');
+    setMode('providers');
+    setSelectedNpi(npi);
+  }, []);
+
+  const showProviders = () => {
+    if (account?.providers[0]) openProvider(account.providers[0].number);
+    else { setMode('providers'); setAccountId(''); }
+  };
+  const showAccounts = () => {
+    setMode('accounts');
+    setAccountId((selectedAccount ?? accounts[0])?.id ?? '');
+  };
+  const toggleVerification = () => {
+    const next = !filters.needsVerification;
+    setFilters({ ...filters, needsVerification: next });
+    setMode('providers');
+    setAccountId('');
+    if (next) {
+      const first = ranked.find(provider => provider.consensus.contested > 0);
+      if (first) setSelectedNpi(first.number);
+    }
+  };
+
+  return (
+    <div className="shell">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark"><img src="/tempus-mark.png" alt="" /></span>
+          <span>
+            <b>Tempus</b>
+            <span className="brand-sub">Territory copilot</span>
+          </span>
+        </div>
+
+        <div className="spacer" />
+        <div className="status">
+          {source === 'demo' && (
+            <span
+              className="chip warn"
+              title="NPPES was unreachable. Providers come from the ingested market-intelligence CSV; live enrichment is still applied where it succeeds."
+            >
+              <span className="dot" />
+              Demo data: CSV only
+            </span>
+          )}
+          <button className="btn ghost" onClick={() => setMethodOpen(true)}>
+            <Info />
+            How this works
+          </button>
+        </div>
+      </header>
+
+      <div className="work">
+        {/* ------------------------------------------------------ the queue */}
+        <aside className="queue">
+          <div className="queue-head">
+            <div className="segmented small">
+              <button className={mode === 'providers' ? 'on' : ''} onClick={() => { setMode('providers'); setAccountId(''); }}>
+                <User /> Providers
+              </button>
+              <button className={mode === 'accounts' ? 'on' : ''} onClick={() => setMode('accounts')}>
+                <Building2 /> Accounts
+              </button>
+            </div>
+            <span className="count">{loading ? '…' : mode === 'providers' ? visible.length : accounts.length}</span>
+          </div>
+
+          <div className="filters">
+            <div className="filter-search">
+              <Search />
+              <input
+                aria-label="Filter by name"
+                placeholder="Filter by name"
+                value={filters.query}
+                onChange={e => setFilters({ ...filters, query: e.target.value })}
+              />
+              {activeFilters > 0 && (
+                <button className="icon-btn" title="Clear filters" onClick={() => setFilters(NO_FILTERS)}>
+                  <FilterX />
+                </button>
+              )}
+            </div>
+
+            <div className="filter-chips">
+              <button
+                className={`fchip${filters.needsVerification ? ' on' : ''}`}
+                onClick={() => setFilters({ ...filters, needsVerification: !filters.needsVerification })}
+              >
+                <AlertTriangle /> Needs verifying
+              </button>
+              <button
+                className={`fchip${filters.hasNote ? ' on' : ''}`}
+                onClick={() => setFilters({ ...filters, hasNote: !filters.hasNote })}
+              >
+                Has note
+              </button>
+              {options.segments.length > 1 && (
+                <select
+                  aria-label="Segment"
+                  className={`fselect${filters.segment !== 'all' ? ' on' : ''}`}
+                  value={filters.segment}
+                  onChange={e => setFilters({ ...filters, segment: e.target.value })}
+                >
+                  <option value="all">Any segment</option>
+                  {options.segments.map(seg => <option key={seg} value={seg}>{seg}</option>)}
+                </select>
+              )}
+              {options.objections.length > 1 && (
+                <select
+                  aria-label="Objection"
+                  className={`fselect${filters.objection !== 'all' ? ' on' : ''}`}
+                  value={filters.objection}
+                  onChange={e => setFilters({ ...filters, objection: e.target.value })}
+                >
+                  <option value="all">Any concern</option>
+                  {options.objections.map(o => <option key={o} value={o}>{o}</option>)}
+                </select>
+              )}
+            </div>
+          </div>
+
+          {mode === 'providers' && (
+            <p className="queue-legend">
+              Higher score means greater estimated eligible-patient impact and stronger evidence confidence.
+            </p>
+          )}
+
+          <div className="queue-list">
+            {loading ? (
+              Array.from({ length: 7 }, (_, i) => <div className="skel" key={i} />)
+            ) : mode === 'providers' ? (
+              visible.map((provider, index) => (
+                <button
+                  key={provider.number}
+                  className={`qrow${provider.number === selected?.number && !account ? ' on' : ''}`}
+                  data-top={index + 1}
+                  data-band={band(provider.score)}
+                  onClick={() => { setSelectedNpi(provider.number); setAccountId(''); }}
+                >
+                  <span className="qrank">{index + 1}</span>
+                  <Headshot provider={provider} />
+                  <span className="who">
+                    <b>{displayName(provider)}</b>
+                    {(provider.estimatedPatients || provider.crm || provider.consensus.contested > 0) && (
+                      <span className="sub">
+                        {provider.consensus.contested > 0 && (
+                          <AlertTriangle style={{ width: 11, color: 'var(--amber)', flex: '0 0 auto' }} />
+                        )}
+                        <span>
+                          {[
+                            provider.estimatedPatients && `~${provider.estimatedPatients.toLocaleString()} patients`,
+                            provider.crm?.objection,
+                          ].filter(Boolean).join(' · ')}
+                        </span>
+                      </span>
+                    )}
+                    <span className="qbar"><i style={{ width: `${provider.score}%` }} /></span>
+                  </span>
+                  <span className="score"><b>{provider.score}</b></span>
+                </button>
+              ))
+            ) : (
+              accounts.map(item => {
+                const shared = item.themes.find(t => t.count > 1);
+                return (
+                  <button
+                    key={item.id}
+                    className={`qrow acct${item.id === accountId ? ' on' : ''}`}
+                    onClick={() => setAccountId(item.id)}
+                  >
+                    <span className="who">
+                      <b>{item.probableInstitution?.name ?? item.site}</b>
+                      <span className="sub">
+                        <span>
+                          {item.providers.length} oncologist{item.providers.length === 1 ? '' : 's'}
+                          {shared && ` · ${shared.count}× ${shared.objection}`}
+                        </span>
+                      </span>
+                    </span>
+                    <span className="score"><b>{item.providers.length}</b></span>
+                  </button>
+                );
+              })
+            )}
+            {!loading && !visible.length && !error && (
+              <div className="empty-state">
+                {ranked.length
+                  ? <>No provider matches these filters. <button className="linkish" onClick={() => setFilters(NO_FILTERS)}>Clear</button></>
+                  : 'No active oncology providers matched this market.'}
+              </div>
+            )}
+          </div>
+        </aside>
+
+        {/* ----------------------------------------------------- the stage */}
+        <main className="stage">
+          {/* The territory is the ground the workspace stands on: sharp where
+              the page is open, frosted under the reading column by the veil. */}
+          <div className="stage-map">
+            <Suspense fallback={null}>
+              <TerritoryMap
+                points={mapPoints}
+                providers={mapProviders}
+                selectedNpi={account ? account.providers[0]?.number : selected?.number}
+                onSelect={openProvider}
+                fitRequest={fitRequest}
+              />
+            </Suspense>
+          </div>
+          <div className="stage-veil" />
+
+          {error ? (
+            <div className="stage-body">
+              <div className="stage-scroll">
+                <div className="stage-column">
+                  <div className="err">
+                    <b>Could not load this market</b>
+                    <span>{error}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : account ? (
+            <>
+              <div className="stage-head">
+                <div className="stage-column">
+                  <div className="dossier">
+                    <div className="dossier-id">
+                      <span className="eyebrow">Account</span>
+                      <h1>{account.probableInstitution?.name ?? account.site}</h1>
+                      <dl className="dossier-facts">
+                        <div><dt><MapPin /></dt><dd>{account.site}, {account.city}, {account.state} {account.zip}</dd></div>
+                        <div><dt>Sites</dt><dd>{account.sites.length}</dd></div>
+                        <div><dt>Concerns</dt><dd>{account.themes.length} on record</dd></div>
+                        {account.contested > 0 && (
+                          <div className="flag"><dt><AlertTriangle /></dt><dd>{account.contested} record{account.contested === 1 ? '' : 's'} to verify</dd></div>
+                        )}
+                      </dl>
+                    </div>
+                    <div className="dossier-score">
+                      <b>{account.providers.length}</b>
+                      <span className="cap">oncologists</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="stage-body">
+                <div className="stage-scroll">
+                  <div className="stage-column">
+                    <AccountPanel
+                      account={account}
+                      onSelectProvider={npi => openProvider(npi)}
+                    />
+                  </div>
+                </div>
+
+                <aside className="stage-context">
+                  <TerritoryControl
+                    city={market.city}
+                    state={market.state}
+                    providers={visible.length}
+                    accounts={accounts.length}
+                    mode={mode}
+                    contested={contested}
+                    verificationActive={filters.needsVerification}
+                    onProviders={showProviders}
+                    onAccounts={showAccounts}
+                    onVerification={toggleVerification}
+                    onFit={() => setFitRequest(value => value + 1)}
+                  />
+                </aside>
+              </div>
+            </>
+          ) : !selected ? (
+            <div className="stage-body">
+              <div className="stage-scroll">
+                <div className="stage-column">
+                  <div className="empty-state">Select a provider.</div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <>
+              {/* ------------------------------------- who you are calling */}
+              <div className="stage-head">
+                <div className="stage-column">
+                  <div className="dossier">
+                    <div className="dossier-face">
+                      <Headshot provider={selected} size="lg" />
+                      <HeadshotCredit provider={selected} />
+                    </div>
+                    <div className="dossier-id">
+                      <span className="eyebrow">#{visible.findIndex(p => p.number === selected.number) + 1 || 1} in {market.city}</span>
+                      <h1>{displayName(selected)}</h1>
+                      <p className="dossier-role">{specialty(selected)}</p>
+                      <dl className="dossier-facts">
+                        {practiceAddress(selected) && (
+                          <div><dt><MapPin /></dt><dd>{practiceAddress(selected)}</dd></div>
+                        )}
+                        {practicePhone(selected) && (
+                          <div><dt><Phone /></dt><dd><a href={`tel:${practicePhone(selected).replace(/\D/g, '')}`}>{practicePhone(selected)}</a></dd></div>
+                        )}
+                        {selectedAccount?.probableInstitution && (
+                          <div><dt><Building2 /></dt><dd>{selectedAccount.probableInstitution.name}<em> (asserted, unverified)</em></dd></div>
+                        )}
+                        <div><dt>NPI</dt><dd className="mono">{selected.number}</dd></div>
+                        {selected.segment && <div><dt>Segment</dt><dd>{selected.segment}</dd></div>}
+                        {selected.crm && <div><dt>Last contact</dt><dd>{selected.crm.lastContact}</dd></div>}
+                        {selected.consensus.verifyBeforeCalling && (
+                          <div className="flag"><dt><AlertTriangle /></dt><dd>Verify this record before calling</dd></div>
+                        )}
+                      </dl>
+                    </div>
+                    <div className="dossier-score">
+                      <ScoreRing value={selected.score} />
+                      <span className="cap">priority</span>
+                    </div>
+                  </div>
+
+                  {/* Evidence used to be a second tab. It is the same page now:
+                      the numbers live here, and each one is the way into the
+                      section of the dossier that has to justify it. */}
+                  <div className="signal-strip">
+                    <Signal
+                      value={selected.consensus.confidence}
+                      suffix="/100"
+                      label="identity confidence"
+                      target="ev-identity"
+                      tone={selected.consensus.confidence >= 70 ? 'ok' : selected.consensus.confidence >= 45 ? 'warn' : 'bad'}
+                    />
+                    <Signal
+                      value={selected.consensus.contested}
+                      label={selected.consensus.contested === 1 ? 'contested field' : 'contested fields'}
+                      target="ev-consensus"
+                      tone={selected.consensus.contested > 0 ? 'warn' : 'ok'}
+                    />
+                    <Signal
+                      value={audit.ready ? audit.verified : 'n/a'}
+                      label="claims verified"
+                      target="ev-audit"
+                      tone={audit.ready && audit.withheld > 0 ? 'warn' : audit.ready ? 'ok' : undefined}
+                    />
+                    <Signal
+                      value={audit.ready ? audit.sources.length : 'n/a'}
+                      label="sources cited"
+                      target="ev-audit"
+                    />
+                    <Signal
+                      value={selected.estimatedPatients ? `~${selected.estimatedPatients.toLocaleString()}` : 'n/a'}
+                      label={selected.opportunityCorroborated ? 'est. patients · corroborated' : 'est. patients · unverified'}
+                      target="ev-opportunity"
+                      tone={selected.estimatedPatients && !selected.opportunityCorroborated ? 'warn' : undefined}
+                    />
+                    <Signal
+                      value={selected.panelFit}
+                      suffix="/100"
+                      label={`fit · ${selected.panelAssay}`}
+                      target="ev-panel"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="stage-body">
+                <div className="stage-scroll">
+                  <div className="stage-column">
+                    <BriefPanel provider={selected} onAudit={onAudit} />
+
+                    <div className="section-rule">
+                      <span className="eyebrow">Evidence &amp; verification</span>
+                      <span>everything the copy above rests on</span>
+                    </div>
+
+                    <TrustPanel provider={selected} all={ranked} audit={audit} />
+                  </div>
+                </div>
+
+                <aside className="stage-context">
+                  <TerritoryControl
+                    city={market.city}
+                    state={market.state}
+                    providers={visible.length}
+                    accounts={accounts.length}
+                    mode={mode}
+                    contested={contested}
+                    relevantTrials={relevantTrials}
+                    verificationActive={filters.needsVerification}
+                    onProviders={showProviders}
+                    onAccounts={showAccounts}
+                    onVerification={toggleVerification}
+                    onFit={() => setFitRequest(value => value + 1)}
+                  />
+
+                  {selectedAccount && selectedAccount.providers.length > 1 && (
+                    <div className="context-card">
+                      <div className="context-head">
+                        <h3>Same site</h3>
+                        <span>{selectedAccount.providers.length - 1} colleague{selectedAccount.providers.length === 2 ? '' : 's'}</span>
+                      </div>
+                      <div className="colleagues">
+                        {selectedAccount.providers
+                          .filter(p => p.number !== selected.number)
+                          .slice(0, 5)
+                          .map(p => (
+                            <button key={p.number} className="colleague" onClick={() => setSelectedNpi(p.number)}>
+                              <span className="cname">{displayName(p)}</span>
+                              {p.crm && <span className="cobj">{p.crm.objection}</span>}
+                              <span className="cscore">{p.score}</span>
+                            </button>
+                          ))}
+                      </div>
+                      {sharedTheme && (
+                        <div className="shared-theme">
+                          <AlertTriangle />
+                          <span>
+                            <b>{sharedTheme.count} physicians here</b> independently raised “{sharedTheme.objection}”.
+                            That reads as a site-level constraint, worth raising with whoever owns the pathway.
+                          </span>
+                        </div>
+                      )}
+                      <button className="ctx-link" onClick={() => { setMode('accounts'); setAccountId(selectedAccount.id); }}>
+                        Open account view <ArrowRight style={{ width: 13 }} />
+                      </button>
+                    </div>
+                  )}
+                </aside>
+              </div>
+            </>
+          )}
+        </main>
+      </div>
+
+      {methodOpen && (
+        <div className="overlay" onMouseDown={e => { if (e.target === e.currentTarget) setMethodOpen(false); }}>
+          <div className="overlay-card" role="dialog" aria-modal="true" aria-label="Method and assumptions">
+            <div className="overlay-head">
+              <h2>Method &amp; assumptions</h2>
+              <button className="icon-btn" onClick={() => setMethodOpen(false)} aria-label="Close"><X /></button>
+            </div>
+            <div className="overlay-body">
+              <MethodPanel weights={WEIGHTS} labels={WEIGHT_LABEL} models={models} />
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
-function MethodologyDrawer({onClose}:{onClose:()=>void}){return <section id="methodology" className="inline-profile methodology" aria-label="Evidence and assumptions"><button className="inline-close" onClick={onClose}><X/> Close</button><div className="drawer-hero"><span>Model card</span><h2>Evidence & assumptions</h2><p>What the prototype knows, estimates, and refuses to claim.</p></div><div className="inline-grid"><section className="drawer-section"><span>Production rank</span><h3>Explainable weighted baseline</h3><p>40% CMS opportunity · 15% local trial activity · 15% simulated engagement · 15% NPI freshness · 15% evidence confidence.</p><small>The deterministic score remains operational until a learned model passes validation.</small></section><section className="drawer-section"><span>Phase 2 shadow model</span><h3>Logistic regression with uncertainty</h3><p>The experimental model uses five normalized features, 12 bootstrap outcomes, and feedback captured in this browser.</p><small>Promotion requires 40 genuine outcomes, calibration and bias review.</small></section><section className="drawer-section evidence-grid"><span>Data contract</span><div><b>REAL</b><p>NPPES, CMS, ClinicalTrials.gov, PubMed, official Tempus evidence and user-entered outcomes.</p></div><div className="sim"><b>SIMULATED</b><p>Eight CRM notes and 12 model bootstrap outcomes.</p></div></section><section className="drawer-section"><span>Automated guardrails</span><ul><li><Check/> Exact active NPI practice-city match</li><li><Check/> CMS volume labeled as Original Medicare</li><li><Check/> Strict publication and photo matching</li><li><Check/> Unsupported claims fail closed</li><li><Check/> Model remains in shadow mode</li><li><Check/> Slack excludes CRM and PHI</li></ul></section><section className="drawer-section limitations"><span>Known limitations</span><p>CMS data is annual and excludes Medicare Advantage and commercial populations. City-level trials do not prove physician participation. NPPES does not validate licensure. Scores do not represent clinical quality.</p></section></div></section>}
-
-function TerritoryMap({points,providers,selectedNpi,onSelect}:{points:ProviderPoint[];providers:RankedProvider[];selectedNpi?:string;onSelect:(npi:string)=>void}){
-  const node=useRef<HTMLDivElement>(null); const map=useRef<mapboxgl.Map|null>(null); const markers=useRef<Map<string,mapboxgl.Marker>>(new Map());
-  const fitTerritory=()=>{if(!map.current||!points.length)return;const bounds=new mapboxgl.LngLatBounds();points.forEach(p=>bounds.extend([p.longitude,p.latitude]));map.current.fitBounds(bounds,{padding:80,maxZoom:10.5,pitch:0,bearing:0,duration:900})};
-  useEffect(()=>{if(!node.current||map.current)return; mapboxgl.accessToken=MAPBOX_TOKEN;map.current=new mapboxgl.Map({container:node.current,style:'mapbox://styles/mapbox/standard',config:{basemap:{theme:'default',lightPreset:'dawn',show3dObjects:false,showPointOfInterestLabels:true}},center:[-87.6298,41.8781],zoom:10.2,pitch:0,bearing:0,dragRotate:false,pitchWithRotate:false,attributionControl:false});map.current.touchZoomRotate.disableRotation();map.current.addControl(new mapboxgl.NavigationControl({showCompass:false,visualizePitch:false}),'bottom-right');map.current.addControl(new mapboxgl.GeolocateControl({positionOptions:{enableHighAccuracy:true},trackUserLocation:true}),'bottom-right');map.current.addControl(new mapboxgl.FullscreenControl(),'bottom-right');return()=>{map.current?.remove();map.current=null}},[]);
-  useEffect(()=>{if(!map.current||!points.length)return;markers.current.forEach(m=>m.remove());markers.current.clear();const duplicates=new Map<string,number>();points.forEach(point=>{const key=`${point.longitude},${point.latitude}`;const offset=duplicates.get(key)??0;duplicates.set(key,offset+1);const angle=offset*2.4;const radius=offset?0.00035*Math.ceil(offset/2):0;const coords:[number,number]=[point.longitude+Math.cos(angle)*radius,point.latitude+Math.sin(angle)*radius];const p=providers.find(x=>x.number===point.npi);const el=document.createElement('button');el.className='map-marker';el.innerHTML=`<span>${p?.score??''}</span>`;el.setAttribute('aria-label',p?name(p):'Provider');el.onclick=()=>onSelect(point.npi);const marker=new mapboxgl.Marker({element:el}).setLngLat(coords).addTo(map.current!);markers.current.set(point.npi,marker)});fitTerritory()},[points,providers,onSelect]);
-  useEffect(()=>{markers.current.forEach((marker,npi)=>marker.getElement().classList.toggle('active',npi===selectedNpi));if(!selectedNpi||!map.current)return;const marker=markers.current.get(selectedNpi);if(!marker)return;map.current.flyTo({center:marker.getLngLat(),zoom:12.8,pitch:0,bearing:0,duration:850,essential:true})},[selectedNpi]);
-  return <div className="map-frame"><div ref={node} className="map"/><div className="map-tools"><button onClick={fitTerritory} title="Show all providers"><RotateCcw/> Reset view</button><button onClick={()=>map.current?.getContainer().querySelector<HTMLButtonElement>('.mapboxgl-ctrl-geolocate')?.click()} title="Find my location"><LocateFixed/> Near me</button></div></div>;
+/**
+ * One number from the evidence trail, and the way into the section that has to
+ * justify it. Every figure in the strip is answerable, so every figure is a
+ * button; a readout the reader cannot open would only raise the question.
+ */
+function Signal({
+  value, suffix, label, target, tone,
+}: {
+  value: number | string;
+  suffix?: string;
+  label: string;
+  target: string;
+  tone?: 'ok' | 'warn' | 'bad';
+}) {
+  return (
+    <button className="signal" data-tone={tone} onClick={() => reveal(target)} title={`Show ${label}`}>
+      <b>{value}{suffix && <em>{suffix}</em>}</b>
+      <span>{label}</span>
+    </button>
+  );
 }
 
-function ProviderAvatar({provider,photo}:{provider:Provider;photo?:ProviderPhoto}){return photo?<span className="doctor-photo" title="NPI-matched official public photo"><img src={photo.url} alt={name(provider)}/></span>:<span className="doctor-photo fallback" title="No identity-verified public photo found">{provider.basic.first_name?.[0]}{provider.basic.last_name?.[0]}</span>}
+function TerritoryControl({
+  city, state, providers, accounts, mode, contested, relevantTrials,
+  verificationActive, onProviders, onAccounts, onVerification, onFit,
+}: {
+  city: string;
+  state: string;
+  providers: number;
+  accounts: number;
+  mode: Mode;
+  contested: number;
+  relevantTrials?: number;
+  verificationActive: boolean;
+  onProviders: () => void;
+  onAccounts: () => void;
+  onVerification: () => void;
+  onFit: () => void;
+}) {
+  return (
+    <div className="context-card territory-control">
+      <div className="context-head">
+        <h3>{city} territory</h3>
+        <span>{state}</span>
+      </div>
 
-function objectionResponse(p: RankedProvider){
-  if(!p.crm)return { text:'No CRM concern is available. Add a real note before generating an objection response.', evidence:[] };
-  const evidence=retrieveEvidence(`${p.crm.objection} ${p.crm.interest}`);
-  if(!evidence.length)return { text:`Insufficient evidence: the Tempus knowledge base does not contain a supported metric for “${p.crm.objection}.” Ask a discovery question and follow up with an approved source rather than guessing.`, evidence:[] };
-  return { text:`Acknowledge the concern directly: “That is a fair question about ${p.crm.objection}. The approved evidence says: ${evidence[0].claim} I would first confirm whether that capability addresses your workflow before discussing next steps.”`, evidence };
+      <div className="territory-modes" role="group" aria-label="Map view">
+        <button className={mode === 'providers' ? 'on' : ''} onClick={onProviders}>
+          <User /><span>Providers</span><b>{providers}</b>
+        </button>
+        <button className={mode === 'accounts' ? 'on' : ''} onClick={onAccounts}>
+          <Building2 /><span>Accounts</span><b>{accounts}</b>
+        </button>
+      </div>
+
+      {relevantTrials !== undefined && (
+        <div className="territory-insight">
+          <b>{relevantTrials}</b>
+          <span>trials match this physician’s stated focus</span>
+        </div>
+      )}
+
+      <button
+        className={`territory-action${verificationActive ? ' on' : ''}`}
+        onClick={onVerification}
+        disabled={contested === 0}
+      >
+        <AlertTriangle />
+        <span>{verificationActive ? 'Showing' : 'Show'} records needing verification</span>
+        <b>{contested}</b>
+      </button>
+      <button className="territory-action" onClick={onFit}>
+        <LocateFixed />
+        <span>Fit map to current results</span>
+      </button>
+    </div>
+  );
 }
 
-function meetingScript(p: RankedProvider){const evidence=retrieveEvidence(p.crm?.interest??'clinical utility')[0];const signal=p.utilization?`${p.utilization.beneficiaries} Original Medicare beneficiaries and ${Math.round(p.utilization.services)} services reported in CMS’s ${p.utilization.year} data`:`an active oncology practice record`;return `“Dr. ${p.basic.last_name}, public data shows ${signal}, alongside ${p.cityTrials.length} recruiting cancer ${p.cityTrials.length===1?'trial':'trials'} in this market. ${evidence?.claim??'I would like to understand where comprehensive genomic profiling fits your current workflow.'} Given your interest in ${p.crm?.interest??'oncology care'}, could we spend 15 minutes identifying where the evidence is relevant—and where it is not?”`}
-
-function ProviderDrawer({provider:p,photo,rankPosition,scoreDelta,onClose}:{provider:RankedProvider;photo?:ProviderPhoto;rankPosition:number;scoreDelta:number;onClose:()=>void}){
-  const location=address(p); const specialty=p.taxonomies.find(t=>t.primary)?.desc??'Oncology';
-  const [publications,setPublications]=useState<Publication[]>([]); const [pubLoading,setPubLoading]=useState(true); const response=objectionResponse(p);
-  const [feedbackVersion,setFeedbackVersion]=useState(0);const insight=useMemo(()=>trainShadowModel(p),[p,feedbackVersion]);const [watched,setWatched]=useState(()=>localStorage.getItem(`watch-${p.number}`)==='true');const [slackStatus,setSlackStatus]=useState('');const eligible=isSlackEligible(p,rankPosition,scoreDelta);
-  useEffect(()=>{let active=true;setPubLoading(true);fetchPublications(p).then(items=>{if(active)setPublications(items)}).catch(()=>{if(active)setPublications([])}).finally(()=>{if(active)setPubLoading(false)});return()=>{active=false}},[p.number]);
-  return <section id="provider-details" className="inline-profile provider-detail" aria-label={`${name(p)} public profile`}>
-    <button className="inline-close" onClick={onClose} aria-label="Close profile"><X/> Close</button>
-    <div className="drawer-hero"><ProviderAvatar provider={p} photo={photo}/><span>Public provider profile</span><h2>{name(p)}</h2><p>{specialty}</p>{photo&&<a href={photo.sourceUrl} target="_blank" rel="noreferrer">Verified photo source <ExternalLink/></a>}</div>
-    <div className="drawer-metrics"><div><b>{p.score}</b><span>Priority score</span></div><div><b>{p.utilization?.beneficiaries??'—'}</b><span>Medicare beneficiaries</span></div><div><b>{p.cityTrials.length}</b><span>Recruiting trials</span></div></div>
-    <section className="drawer-section"><span>Practice details</span><h3>{location?.address_1}</h3><p>{location?.city}, {location?.state} {location?.postal_code?.slice(0,5)}</p>{location?.telephone_number&&<a href={`tel:${location.telephone_number}`}>{location.telephone_number}</a>}</section>
-    <section className="drawer-section"><span>Why this provider</span><p>{p.utilization?`CMS reported ${p.utilization.beneficiaries} Original Medicare beneficiaries, ${Math.round(p.utilization.services)} services, and ${p.utilization.hcpcsCodes} distinct HCPCS codes in ${p.utilization.year}. `:'CMS provider utilization was unavailable. '}{p.cityTrials.length} recruiting cancer {p.cityTrials.length===1?'trial is':'trials are'} active in the same city. These are opportunity proxies, not total patient volume.</p><div className="score-bars"><ScoreBar label="Opportunity" value={p.opportunity}/><ScoreBar label="Trial activity" value={p.trialSignal}/><ScoreBar label="Engagement" value={p.engagement}/><ScoreBar label="Freshness" value={p.recency}/><ScoreBar label="Confidence" value={p.confidence}/></div></section>
-    <section className="drawer-section crm-card"><div className="section-label"><span>CRM context</span><b>SIMULATED</b></div>{p.crm?<><h3>{p.crm.objection}</h3><p>{p.crm.note}</p><small>Interest: {p.crm.interest} · Last contact: {p.crm.lastContact}</small></>:<p>No CRM note is available. This provider receives no engagement points.</p>}</section>
-    <section className="drawer-section answer-card"><span>Objection handler</span><h3>{p.crm?`Concern: ${p.crm.objection}`:'Evidence-safe response'}</h3><p>{response.text}</p>{response.evidence.map(item=><a key={item.id} href={item.url} target="_blank" rel="noreferrer">{item.source} · accessed {item.accessed} <ExternalLink/></a>)}</section>
-    <section className="drawer-section script-card"><span>30-second meeting script</span><blockquote>{meetingScript(p)}</blockquote><small><ShieldCheck/> Drafted only from displayed public evidence and labeled CRM context. Review before use.</small></section>
-    <section className="drawer-section publications"><span>Recent research signal</span>{pubLoading?<p>Checking PubMed…</p>:publications.length?publications.map(item=><a key={item.pmid} href={item.sourceUrl} target="_blank" rel="noreferrer"><BookOpen/><span><b>{item.title}</b><small>PubMed · {item.date??'date unavailable'}</small></span><ExternalLink/></a>):<p><FileWarning/> No confidently matched PubMed results found. No publication signal was added.</p>}</section>
-    <section className="drawer-section model-card"><div className="section-label"><span>Outcome model</span><b>SHADOW MODE</b></div><div className="propensity"><b>{insight.probability}%</b><span>experimental meeting propensity<small>{insight.confidence} confidence · {insight.realOutcomes} real outcomes</small></span></div><p>This logistic-regression baseline is trained on {insight.bootstrapOutcomes} simulated bootstrap outcomes plus feedback captured in this browser. It does not affect provider rank.</p><div className="contributions">{insight.contributions.slice(0,3).map(item=><div key={item.label}><span>{item.label}</span><b>{item.value>0?'+':''}{item.value}</b></div>)}</div><small>Training accuracy {insight.accuracy}% · Brier score {insight.brier}. Not valid for production until evaluated on sufficient real outcomes.</small><div className="feedback-actions"><button onClick={()=>{recordFeedback(p,1);setFeedbackVersion(value=>value+1)}}>Meeting booked</button><button onClick={()=>{recordFeedback(p,0);setFeedbackVersion(value=>value+1)}}>Not relevant</button></div></section>
-    <section className="drawer-section action-card"><span>Next best action</span><h3>{nextBestAction(p)}</h3><div className={`change-chip ${scoreDelta>0?'up':scoreDelta<0?'down':''}`}>{scoreDelta===0?'No score change since baseline':`${scoreDelta>0?'+':''}${scoreDelta} points since last evidence refresh`}</div><div className="action-buttons"><button onClick={()=>{const next=!watched;localStorage.setItem(`watch-${p.number}`,String(next));setWatched(next)}}>{watched?'Watching provider':'Add to watchlist'}</button><button disabled={!eligible||slackStatus==='sending'} onClick={async()=>{setSlackStatus('sending');try{await sendSlackAlert({provider:name(p),npi:p.number,rank:rankPosition,score:p.score,reason:nextBestAction(p),profileUrl:`${NPI_SOURCE}provider-view/${p.number}`});setSlackStatus('sent')}catch(error){setSlackStatus(error instanceof Error?error.message:'Slack failed')}}}>{slackStatus==='sent'?'Sent to Slack':eligible?'Send Slack alert':'Slack threshold not met'}</button></div>{slackStatus&&slackStatus!=='sent'&&slackStatus!=='sending'&&<small>{slackStatus}</small>}<p>Eligible only when rank ≤5, score ≥70, score increases ≥10, confidence ≥70, and recruiting trials exist.</p></section>
-    <div className="drawer-sources"><div><ShieldCheck/><span><b>Evidence ledger</b><small>NPI updated {p.basic.last_updated??'date unavailable'} · public-data limitations apply</small></span></div><a href={`${NPI_SOURCE}provider-view/${p.number}`} target="_blank" rel="noreferrer">Open NPI record <ExternalLink/></a>{p.utilization&&<a href={p.utilization.sourceUrl} target="_blank" rel="noreferrer">Open CMS utilization source <ExternalLink/></a>}<a href="https://clinicaltrials.gov/" target="_blank" rel="noreferrer">Open trial source <ExternalLink/></a></div>
-  </section>
+/**
+ * Open the disclosure the number came from and bring it into view. Cards are
+ * <details>, so this is what replaces the old tab switch: the evidence was
+ * never a different page, only a different depth.
+ */
+function reveal(id: string) {
+  const element = document.getElementById(id);
+  if (!element) return;
+  if (element instanceof HTMLDetailsElement) element.open = true;
+  element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  element.classList.remove('revealed');
+  // Restart the highlight even when the same signal is clicked twice.
+  void element.offsetWidth;
+  element.classList.add('revealed');
+  setTimeout(() => element.classList.remove('revealed'), 1600);
 }
 
-function ScoreBar({label,value}:{label:string;value:number}){return <div><span>{label}</span><i><b style={{width:`${value}%`}}/></i><strong>{value}</strong></div>}
+/** Score bands drive rank colour in the queue and in the ring. */
+function band(score: number) {
+  return score >= 80 ? 'high' : score >= 60 ? 'mid' : 'low';
+}
 
-function Brief({provider:p,photo}:{provider:RankedProvider;photo?:ProviderPhoto}){const trial=p.cityTrials[0]?.protocolSection.identificationModule.briefTitle;return <section className="brief"><div className="brief-profile"><ProviderAvatar provider={p} photo={photo}/><div><small>Recommended conversation</small><h2>{name(p)}</h2><p><MapPin/> {address(p)?.address_1}, {address(p)?.city}</p></div><div className="profile-links"><a href={`${NPI_SOURCE}provider-view/${p.number}`} target="_blank" rel="noreferrer">NPI record <ExternalLink/></a>{photo&&<a href={photo.sourceUrl} target="_blank" rel="noreferrer">Photo source <ExternalLink/></a>}</div></div><div className="brief-content"><article className="next-step"><span><Sparkles/> Suggested opener</span><p>“Dr. {p.basic.last_name}, I noticed {trial?`local recruitment for ${trial}`:`active oncology research in ${address(p)?.city}`}. Tempus xT CDx offers FDA-approved 648-gene tissue-based profiling for malignant solid tumors. Could we spend 15 minutes on where comprehensive profiling fits your workflow?”</p><small><ShieldCheck/> AI-drafted from cited facts · review before use</small></article><div className="quick-facts"><h3>Why now</h3><div><Check/><span><b>{p.cityTrials.length} recruiting cancer trials</b><small>Same-city ClinicalTrials.gov records</small></span></div><div><Check/><span><b>648-gene FDA-approved test</b><small>Official Tempus xT CDx product page</small></span></div><a href={TEMPUS_SOURCE} target="_blank" rel="noreferrer">View supporting evidence <ExternalLink/></a></div></div></section>}
+const RING_R = 26;
+const RING_C = 2 * Math.PI * RING_R;
+
+/**
+ * The priority score, as a dial. The number alone reads as a label; an arc
+ * makes "90 out of 100" legible without the rep doing arithmetic.
+ */
+function ScoreRing({ value }: { value: number }) {
+  return (
+    <div className="score-ring" data-band={band(value)}>
+      <svg viewBox="0 0 62 62" aria-hidden="true">
+        <defs>
+          <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop className="g-a" offset="0%" />
+            <stop className="g-b" offset="100%" />
+          </linearGradient>
+        </defs>
+        <circle className="track" cx="31" cy="31" r={RING_R} />
+        <circle
+          className="fill"
+          cx="31"
+          cy="31"
+          r={RING_R}
+          strokeDasharray={`${(Math.max(0, Math.min(100, value)) / 100) * RING_C} ${RING_C}`}
+        />
+      </svg>
+      <span className="num">{value}</span>
+    </div>
+  );
+}

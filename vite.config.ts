@@ -5,6 +5,47 @@ export default defineConfig(({mode}) => {
   const env=loadEnv(mode,process.cwd(),'');
   return {
   plugins: [react(),{
+    name:'llm-gateway',
+    configureServer(server){
+      // Credentials live on the server only. The client posts here and never
+      // sees a key, so the built bundle contains no secret material.
+      const keys={gemini:env.GEMINI_API_KEY,groq:env.GROQ_API_KEY};
+      server.middlewares.use('/api/llm/status',(_request,response)=>{
+        response.setHeader('Content-Type','application/json');
+        response.end(JSON.stringify({providers:Object.entries(keys).filter(([,key])=>Boolean(key)).map(([name])=>name)}));
+      });
+      server.middlewares.use('/api/llm',(request,response)=>{
+        const json=(status:number,body:unknown)=>{response.statusCode=status;response.setHeader('Content-Type','application/json');response.end(JSON.stringify(body))};
+        if(request.method!=='POST')return json(405,{error:'Method not allowed'});
+        let raw='';request.on('data',chunk=>{raw+=chunk;if(raw.length>200000)request.destroy()});
+        request.on('end',async()=>{
+          try{
+            const {provider,prompt,system,temperature}=JSON.parse(raw);
+            const key=keys[provider as 'gemini'|'groq'];
+            if(!key)return json(503,{error:`${provider} is not configured`});
+            if(provider==='gemini'){
+              const model='gemini-2.0-flash';
+              const result=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key}`,{
+                method:'POST',headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({contents:[{parts:[{text:prompt}]}],systemInstruction:system?{parts:[{text:system}]}:undefined,generationConfig:{temperature:temperature??0.2}}),
+              });
+              if(!result.ok)return json(502,{error:`Gemini returned ${result.status}`});
+              const data=await result.json();
+              return json(200,{text:data.candidates?.[0]?.content?.parts?.[0]?.text??'',model});
+            }
+            const model='llama-3.3-70b-versatile';
+            const result=await fetch('https://api.groq.com/openai/v1/chat/completions',{
+              method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${key}`},
+              body:JSON.stringify({model,temperature:temperature??0.2,messages:[...(system?[{role:'system',content:system}]:[]),{role:'user',content:prompt}]}),
+            });
+            if(!result.ok)return json(502,{error:`Groq returned ${result.status}`});
+            const data=await result.json();
+            return json(200,{text:data.choices?.[0]?.message?.content??'',model});
+          }catch(error){return json(400,{error:error instanceof Error?error.message:'LLM request failed'})}
+        });
+      });
+    },
+  },{
     name:'slack-webhook-server',
     configureServer(server){server.middlewares.use('/api/slack',(request,response)=>{
       if(request.method!=='POST'){response.statusCode=405;response.end(JSON.stringify({error:'Method not allowed'}));return}

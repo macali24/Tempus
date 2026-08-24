@@ -3,3 +3,8 @@ dist/
 .DS_Store
 *.local
 *.tsbuildinfo
+
+.tsbuild/
+src/lib/kb.generated.ts
+src/lib/crm.generated.ts
+src/lib/market.generated.ts

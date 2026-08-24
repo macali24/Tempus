@@ -10,14 +10,25 @@ export type Study = {
     identificationModule: { nctId: string; briefTitle: string };
     statusModule: { overallStatus: string };
     conditionsModule?: { conditions?: string[] };
-    contactsLocationsModule?: { locations?: Array<{ facility?: string; city?: string; state?: string }> };
+    contactsLocationsModule?: { locations?: Array<{ facility?: string; city?: string; state?: string; zip?: string }> };
   };
 };
 
-export type CmsUtilization = { beneficiaries: number; services: number; hcpcsCodes: number; medicarePayment: number; year: number; sourceUrl: string };
-export type CrmNote = { objection: string; interest: string; note: string; lastContact: string; engagement: number; simulated: true };
-export type Publication = { pmid: string; title: string; date?: string; sourceUrl: string };
+export type CmsUtilization = { beneficiaries: number; services: number; hcpcsCodes: number; medicarePayment: number; year: number; sourceUrl: string; city?: string; state?: string; specialty?: string };
+export type CrmNote = {
+  npi?: string;
+  physician?: string;
+  /** Extracted from the note prose, not supplied as a label. */
+  objection: string;
+  /** The phrases that produced the extraction, so it can be shown not asserted. */
+  objectionCues?: string[];
+  interest: string;
+  note: string;
+  lastContact: string;
+  engagement: number;
+  simulated: true;
+};
+export type Publication = { pmid: string; title: string; date?: string; sourceUrl: string; affiliation?: string };
 export type RankedProvider = Provider & { score: number; opportunity: number; exactFit: number; trialSignal: number; engagement: number; recency: number; confidence: number; cityTrials: Study[]; utilization?: CmsUtilization; crm?: CrmNote };
 
 export type ProviderPoint = { npi: string; longitude: number; latitude: number };
-export type ProviderPhoto = { url: string; sourceUrl: string };

@@ -4,9 +4,16 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "dev": "npm run ingest && vite",
+    "build": "npm run ingest && tsc -b && vite build",
+    "preview": "vite preview",
+    "eval": "tsx scripts/eval.ts",
+    "smoke": "tsx scripts/smoke.ts",
+    "adversarial": "tsx scripts/adversarial.ts",
+    "gate4": "tsx scripts/gate4.ts",
+    "verify": "npm run ingest && tsc -b && npm run style && npm run eval && npm run gate4 && npm run adversarial",
+    "ingest": "tsx scripts/ingest.ts",
+    "style": "tsx scripts/no-em-dash.ts"
   },
   "dependencies": {
     "@vitejs/plugin-react": "latest",
@@ -17,8 +24,10 @@
     "vite": "latest"
   },
   "devDependencies": {
+    "@types/node": "^26.2.0",
     "@types/react": "latest",
     "@types/react-dom": "latest",
+    "tsx": "^4.23.12",
     "typescript": "latest"
   }
 }

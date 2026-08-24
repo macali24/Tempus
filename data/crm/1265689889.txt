@@ -1,0 +1,10 @@
+---
+npi: 1265689889
+physician: Manik Amin
+last_contact: 2026-07-28
+rep: J. Doe
+---
+
+3/12 call, asked whether comprehensive profiling would delay the next treatment decision. Wants to know how long results take. Said last vendor "took forever". Follow up w/ data.
+
+Interest noted: gastrointestinal oncology and trial matching.

@@ -1,0 +1,10 @@
+---
+npi: 1366770745
+physician: Karim Abou-Nassar
+last_contact: 2026-07-30
+rep: J. Doe
+---
+
+core biopsies often small. asked what happens when tissue is exhausted, is there a blood-based option? did not commit to anything.
+
+Interest noted: lymphoma and cellular therapy.

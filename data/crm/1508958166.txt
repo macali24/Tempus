@@ -1,0 +1,10 @@
+---
+npi: 1508958166
+physician: Vahid Afsharkhargan
+last_contact: 2026-06-22
+rep: J. Doe
+---
+
+Discussed a case in detail, MRN: 55512, asked whether profiling changes management. Mostly non-oncologic practice.
+
+Interest noted: benign hematology and thrombosis.

@@ -1,9 +1,10 @@
-import type { CmsUtilization, Provider, ProviderPhoto, ProviderPoint, Publication, Study } from './types';
+import type { CmsUtilization, Provider, ProviderPoint, Publication, Study } from './types';
 
 // NPPES does not emit browser CORS headers. Vite proxies this path in development.
 const NPI_API = '/api/npi';
 const CTG_API = 'https://clinicaltrials.gov/api/v2/studies';
-export const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN ?? '';
+// Guarded so the module can also be imported by Node scripts (eval, smoke test).
+export const MAPBOX_TOKEN: string = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MAPBOX_TOKEN) || '';
 const CMS_PROVIDER_DATASET = '4d0b2df0-1e99-4db7-a574-a571d99217f1';
 
 export async function fetchProviders(city: string, state: string): Promise<Provider[]> {
@@ -20,12 +21,20 @@ export async function fetchProviders(city: string, state: string): Promise<Provi
   return exactMarket;
 }
 
-export async function fetchTrials(city: string, state: string): Promise<Study[]> {
+export type TrialResult = { studies: Study[]; total: number };
+
+/**
+ * `studies` is one page; `total` is the true market count from countTotal.
+ * These must not be conflated; reporting a page size as a trial count puts a
+ * fabricated number into a pitch, which is exactly what this system prevents.
+ */
+export async function fetchTrials(city: string, state: string): Promise<TrialResult> {
   const term = `AREA[OverallStatus]RECRUITING AND AREA[ConditionSearch]cancer AND AREA[LocationCity]\"${city}\" AND AREA[LocationState]\"${state}\"`;
-  const q = new URLSearchParams({ 'query.term': term, pageSize: '40', format: 'json', fields: 'NCTId,BriefTitle,OverallStatus,Condition,LocationFacility,LocationCity,LocationState' });
+  const q = new URLSearchParams({ 'query.term': term, pageSize: '100', format: 'json', countTotal: 'true', fields: 'NCTId,BriefTitle,OverallStatus,Condition,LocationFacility,LocationCity,LocationState,LocationZip' });
   const response = await fetch(`${CTG_API}?${q}`);
   if (!response.ok) throw new Error(`ClinicalTrials.gov returned ${response.status}`);
-  return (await response.json()).studies ?? [];
+  const data = await response.json();
+  return { studies: data.studies ?? [], total: data.totalCount ?? (data.studies?.length ?? 0) };
 }
 
 export async function fetchUtilization(providers: Provider[]): Promise<Record<string, CmsUtilization>> {
@@ -35,7 +44,7 @@ export async function fetchUtilization(providers: Provider[]): Promise<Record<st
       const response = await fetch(`https://data.cms.gov/data-api/v1/dataset/${CMS_PROVIDER_DATASET}/data?${q}`);
       if (!response.ok) return null;
       const row = (await response.json())?.[0]; if (!row) return null;
-      return [provider.number, { beneficiaries:Number(row.Tot_Benes)||0, services:Number(row.Tot_Srvcs)||0, hcpcsCodes:Number(row.Tot_HCPCS_Cds)||0, medicarePayment:Number(row.Tot_Mdcr_Pymt_Amt)||0, year:2024, sourceUrl:'https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners/medicare-physician-other-practitioners-by-provider' }] as const;
+      return [provider.number, { beneficiaries:Number(row.Tot_Benes)||0, services:Number(row.Tot_Srvcs)||0, hcpcsCodes:Number(row.Tot_HCPCS_Cds)||0, medicarePayment:Number(row.Tot_Mdcr_Pymt_Amt)||0, year:2024, city:row.Rndrng_Prvdr_City, state:row.Rndrng_Prvdr_State_Abrvtn, specialty:row.Rndrng_Prvdr_Type, sourceUrl:'https://data.cms.gov/provider-summary-by-type-of-service/medicare-physician-other-practitioners/medicare-physician-other-practitioners-by-provider' }] as const;
     } catch { return null; }
   }));
   const utilization: Record<string,CmsUtilization> = {};
@@ -50,7 +59,28 @@ export async function fetchPublications(provider: Provider): Promise<Publication
   const search = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi?${q}`); if(!search.ok)return [];
   const ids:string[]=(await search.json()).esearchresult?.idlist??[]; if(!ids.length)return [];
   const summary = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi?db=pubmed&id=${ids.join(',')}&retmode=json&tool=tempus_sales_copilot&email=prototype@example.com`); if(!summary.ok)return [];
-  const data=await summary.json(); return ids.map(id=>({pmid:id,title:data.result?.[id]?.title??'Untitled publication',date:data.result?.[id]?.pubdate,sourceUrl:`https://pubmed.ncbi.nlm.nih.gov/${id}/`}));
+  const data=await summary.json();
+  // Affiliation is not exposed by esummary, so efetch supplies it. It is the only
+  // field that lets us cross-check PubMed against the NPPES practice location,
+  // which is how an institution change gets detected.
+  const affiliations = await fetchAffiliations(ids);
+  return ids.map(id=>({pmid:id,title:data.result?.[id]?.title??'Untitled publication',date:data.result?.[id]?.pubdate,sourceUrl:`https://pubmed.ncbi.nlm.nih.gov/${id}/`,affiliation:affiliations[id]}));
+}
+
+async function fetchAffiliations(ids: string[]): Promise<Record<string,string>> {
+  try {
+    const response = await fetch(`https://eutils.ncbi.nlm.nih.gov/entrez/eutils/efetch.fcgi?db=pubmed&id=${ids.join(',')}&retmode=xml&tool=tempus_sales_copilot&email=prototype@example.com`);
+    if (!response.ok) return {};
+    const xml = await response.text();
+    const out: Record<string,string> = {};
+    // One <PubmedArticle> per id, returned in request order.
+    xml.split('<PubmedArticle>').slice(1).forEach((article, index) => {
+      const id = ids[index];
+      const affiliation = article.match(/<Affiliation>([\s\S]*?)<\/Affiliation>/)?.[1];
+      if (id && affiliation) out[id] = affiliation.replace(/<[^>]+>/g, '').trim();
+    });
+    return out;
+  } catch { return {}; }
 }
 
 export async function sendSlackAlert(payload:{provider:string;npi:string;rank:number;score:number;reason:string;profileUrl:string}){
@@ -74,37 +104,4 @@ export async function geocodeProviders(providers: Provider[]): Promise<ProviderP
     return coordinates ? { npi: provider.number, longitude: coordinates[0], latitude: coordinates[1] } : null;
   }));
   return points.filter((point): point is ProviderPoint => Boolean(point));
-}
-
-export async function fetchVerifiedPhotos(providers: Provider[]): Promise<Record<string, ProviderPhoto>> {
-  const audited: Record<string, ProviderPhoto> = {
-    '1265689889': {
-      url: 'https://edge.sitecorecloud.io/unichicagomc-81nbqnb3/media/images/ucmc/physician-photos/a-c/amin-manik-bio-261x347.jpg',
-      sourceUrl: 'https://www.uchicagomedicine.org/find-a-physician/physician/manik-amin',
-    },
-    '1588184956': {
-      url: 'https://www.nm.org/image/doctor/NPI/1588184956.jpg',
-      sourceUrl: 'https://www.cancer.northwestern.edu/find-a-physician/profile.html?xid=64440',
-    },
-    '1033548383': {
-      url: 'https://www.nm.org/image/doctor/NPI/1033548383.jpg',
-      sourceUrl: 'https://www.nm.org/doctors/1033548383/yasmin-abaza-md',
-    },
-  };
-  const providerNpis = new Set(providers.map(provider => provider.number));
-  const photos: Record<string, ProviderPhoto> = Object.fromEntries(Object.entries(audited).filter(([npi]) => providerNpis.has(npi)));
-  const npis = providers.slice(0, 10).map(provider => `"${provider.number}"`).join(' ');
-  if (!npis) return photos;
-  const sparql = `SELECT ?npi ?item ?image WHERE { VALUES ?npi { ${npis} } ?item wdt:P9450 ?npi; wdt:P18 ?image. }`;
-  try {
-    const query = new URLSearchParams({ query: sparql, format: 'json' });
-    const response = await fetch(`https://query.wikidata.org/sparql?${query}`, { headers: { Accept: 'application/sparql-results+json' } });
-    if (!response.ok) return photos;
-    const bindings = (await response.json()).results?.bindings ?? [];
-    bindings.forEach((binding: { npi?: { value?: string }; item?: { value?: string }; image?: { value?: string } }) => {
-      const npi = binding.npi?.value; const image = binding.image?.value; const item = binding.item?.value;
-      if (npi && image && item && !photos[npi]) photos[npi] = { url: image, sourceUrl: item };
-    });
-  } catch { return photos; }
-  return photos;
 }

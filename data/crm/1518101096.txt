@@ -1,0 +1,10 @@
+---
+npi: 1518101096
+physician: Wassim Abida
+last_contact: 2026-08-14
+rep: J. Doe
+---
+
+Runs a translational program. Interested in MSI reporting specifically. Wants to know what is on-label vs exploratory before he will present internally.
+
+Interest noted: genitourinary oncology and precision medicine.

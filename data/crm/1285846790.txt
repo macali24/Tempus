@@ -1,0 +1,10 @@
+---
+npi: 1285846790
+physician: Kerin Adelson
+last_contact: 2026-08-05
+rep: J. Doe
+---
+
+Focused on operational metrics. Asked who does the ordering, who reads the report, and what breaks when volume doubles.
+
+Interest noted: breast oncology and quality measurement.

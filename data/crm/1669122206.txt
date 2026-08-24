@@ -1,0 +1,10 @@
+---
+npi: 1669122206
+physician: Kehinde Adekola
+last_contact: 2026-07-11
+rep: J. Doe
+---
+
+Asked how broad genomic findings translate into an actionable discussion. Skeptical of large panels, "most of it is noise". Wants the CRC story specifically.
+
+Interest noted: gastrointestinal malignancies.
