@@ -19,6 +19,7 @@
  * checks, and a headshot that silently becomes a 404 or someone else's photo is
  * the failure mode this module exists to prevent.
  */
+import { GENERATED_HEADSHOTS } from './headshots.generated';
 import type { Provider } from '../types';
 
 /** How a photo was tied to the NPI it is filed under, strongest first. */
@@ -41,38 +42,31 @@ export type Headshot = {
 };
 
 /**
- * Hand-audited. Every entry was checked against the NPPES record for that NPI
- * before it was added; anyone whose photo could not be tied to their NPI with
- * one of the three kinds of evidence above is deliberately absent and renders
- * the icon. Absent by design, currently: Clare Anderson (1669122206), Worood
- * Abboud (1245325018), Syed Abutalib (1114183290), Kalid Adab (1346473345),
- * Jacob Adashek (1144780107) and Karim Abou-Nassar (1366770745), whose
- * directories publish a placeholder or no photo at all.
+ * Hand-audited entries, for institutions with no machine-checkable key.
+ *
+ * These were each read against the NPPES record for that NPI before being
+ * added: the publisher names the physician, and the practice address NPPES
+ * files for that NPI is the institution doing the publishing. That is weaker
+ * evidence than an NPI-keyed URL, so it is stated as such and the UI says which
+ * kind of match it is showing.
+ *
+ * Everything Northwestern Medicine publishes lives in `headshots.generated.ts`
+ * instead, harvested and re-verified by `npm run headshots`: nm.org keys both
+ * the photo and the profile page by NPI, so identity there is checkable by
+ * machine and hand-maintaining ninety of them would be a transcription risk
+ * with no upside.
+ *
+ * A physician with no entry in either place renders the icon. That is the
+ * common case and not a defect: most directories publish a placeholder
+ * silhouette, or nothing, or only an aggregator listing that asserts no
+ * institutional attribution of its own.
  */
-const REGISTRY: Record<string, Headshot> = {
+const AUDITED: Record<string, Headshot> = {
   '1265689889': {
     sourceName: 'Manik Amin, MD',
     publisher: 'UChicago Medicine',
     sourceUrl: 'https://www.uchicagomedicine.org/find-a-physician/physician/manik-amin',
     evidence: 'name-and-practice-address',
-  },
-  '1033548383': {
-    sourceName: 'Yasmin Abaza, MD',
-    publisher: 'Northwestern Medicine',
-    sourceUrl: 'https://www.nm.org/doctors/1033548383',
-    evidence: 'npi-on-source-page',
-  },
-  '1588184956': {
-    sourceName: 'Bilal Anouti, MD',
-    publisher: 'Northwestern Medicine',
-    sourceUrl: 'https://www.nm.org/doctors/1588184956',
-    evidence: 'npi-on-source-page',
-  },
-  '1114489192': {
-    sourceName: 'Juan Alban, MD',
-    publisher: 'Northwestern Medicine',
-    sourceUrl: 'https://www.nm.org/image/doctor/NPI/1114489192.jpg',
-    evidence: 'npi-keyed-asset',
   },
   '1033562327': {
     sourceName: 'Xavier Andrade-Gonzalez, MD',
@@ -117,6 +111,9 @@ const REGISTRY: Record<string, Headshot> = {
     evidence: 'name-and-practice-address',
   },
 };
+
+/** Every attributable face, however it was verified. */
+const REGISTRY: Record<string, Headshot> = { ...GENERATED_HEADSHOTS, ...AUDITED };
 
 /** Credentials and honorifics carry no identity, so they are not compared. */
 const NOT_A_NAME = new Set([

@@ -1,10 +1,10 @@
 ---
 npi: 1588184956
-physician: Jessica Altman
-last_contact: 2026-07-19
+physician: Bilal Anouti
+last_contact: 2026-08-08
 rep: J. Doe
 ---
 
-Concerned that ordering and result review could add work for the clinic team. Nurse navigator already stretched. Open to a pilot if onboarding is light.
+Wants peer-reviewed and regulatory evidence behind product claims. Asked directly whether the assay is FDA approved or LDT. Do not overstate.
 
-Interest noted: precision oncology and clinical research.
+Interest noted: melanoma surveillance and clinical trials.

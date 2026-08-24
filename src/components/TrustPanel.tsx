@@ -99,14 +99,23 @@ export function TrustPanel({ provider, all, audit }: {
         id="ev-opportunity"
         title="Patient opportunity"
         lede={provider.estimatedPatients ? `~${provider.estimatedPatients.toLocaleString()} est. annual patients` : 'no vendor estimate'}
-        aside={provider.opportunityCorroborated
-          ? <span className="chip ok"><Check />corroborated</span>
-          : <span className="chip warn"><AlertTriangle />unverified</span>}
+        aside={provider.estimatedPatients
+          ? provider.opportunityCorroborated
+            ? <span className="chip ok"><Check />CMS record present</span>
+            : <span className="chip warn"><AlertTriangle />unverified model</span>
+          : provider.utilization
+            ? <span className="chip info">CMS basis</span>
+            : <span className="chip warn"><AlertTriangle />no volume source</span>}
       >
         <p className="hint">
-          The figure comes from the vendor market-intelligence CSV and is a <b>modelled estimate,
-          not a count</b>. It answers the brief's “likely size of patient population”, and it is the
-          only number here that no federal source can confirm outright.
+          {provider.estimatedPatients
+            ? <>The figure comes from the vendor market-intelligence CSV and is a <b>modelled estimate,
+              not a count</b>. A CMS row is independent utilization context, not a validation of that estimate.</>
+            : provider.utilization
+              ? <>No vendor patient estimate is present for this doctor. The opportunity score therefore uses the
+                public CMS Medicare beneficiary count as a fallback and does not invent an annual oncology population.</>
+              : <>Neither the supplied vendor file nor this annual CMS fee-for-service dataset provides a volume figure
+                for this doctor. No patient count is imputed.</>}
         </p>
         <dl className="kv">
           <dt>Vendor estimate</dt><dd>{provider.estimatedPatients?.toLocaleString() ?? 'n/a'}</dd>
@@ -114,9 +123,13 @@ export function TrustPanel({ provider, all, audit }: {
           <dt>CMS beneficiaries</dt><dd>{provider.utilization?.beneficiaries?.toLocaleString() ?? 'none'}</dd>
         </dl>
         <p className="hint" style={{ marginTop: 11 }}>
-          {provider.opportunityCorroborated
-            ? 'A CMS Medicare record exists for this physician, so the estimate has independent support and is scored at full weight.'
-            : 'No CMS Medicare record corroborates this estimate, so its contribution to the score is reduced by 30%.'}
+          {provider.estimatedPatients
+            ? provider.opportunityCorroborated
+              ? 'A CMS Medicare row exists for this physician, so the model is not the only volume-related source in the profile.'
+              : 'No CMS Medicare row is available, so the vendor estimate contribution is reduced by 30%.'
+            : provider.utilization
+              ? 'CMS beneficiaries are shown as their own measured quantity and are not relabeled as estimated oncology patients.'
+              : 'The missing volume signal remains visible in the rank explanation.'}
         </p>
       </Card>
 

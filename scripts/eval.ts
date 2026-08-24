@@ -9,13 +9,14 @@ const RESET = '[0m';
 
 type Row = { id: string; group: string; description: string; passed: boolean; error?: string };
 
-const rows: Row[] = CASES.map(testCase => {
+const rows: Row[] = [];
+for (const testCase of CASES) {
   try {
-    return { ...testCase, passed: testCase.run() };
+    rows.push({ ...testCase, passed: await testCase.run() });
   } catch (error) {
-    return { ...testCase, passed: false, error: error instanceof Error ? error.message : String(error) };
+    rows.push({ ...testCase, passed: false, error: error instanceof Error ? error.message : String(error) });
   }
-});
+}
 
 const groups = [...new Set(rows.map(r => r.group))];
 const pad = (value: string, width: number) => value.padEnd(width);

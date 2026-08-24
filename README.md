@@ -89,18 +89,19 @@ one appears anywhere in source, docs or data.
 
 ## Entity resolution and cross-source consensus
 
-A physician is not one record. They appear in six public sources under different
-keys: three join on NPI, three only offer a name and an affiliation and so
-require probabilistic linkage (Jaro-Winkler, 0.88 floor).
+A physician is not one record. The active ranking path combines NPPES, CMS
+utilization, CMS Open Payments and ClinicalTrials.gov; PubMed is checked on
+demand when a dossier opens. Local vendor and CRM rows also require the live
+NPPES name to clear a Jaro-Winkler 0.88 floor before they can affect a doctor.
 
 | Source | Join | Confidence |
 |---|---|---|
 | NPPES NPI Registry | NPI anchor | exact |
 | CMS Medicare Utilization | NPI equality | exact |
 | CMS Open Payments | `covered_recipient_npi` | exact |
-| ClinicalTrials.gov | name + facility | 0.55 cap |
-| PubMed | full name + affiliation | 0.60–0.75 |
-| Wikidata | property P9450 | exact |
+| ClinicalTrials.gov | practice ZIP + facility context | 0.55 cap |
+| PubMed | full name + affiliation, on demand | 0.60–0.75 |
+| Wikidata | planned, not queried | n/a |
 
 Sources then get cross-checked against each other. Where they disagree the field
 is marked **contested**, identity confidence drops, and the rep is told to verify
@@ -121,8 +122,10 @@ Higher score means greater estimated eligible-patient impact and stronger
 evidence confidence.
 
 Patient opportunity prefers the vendor's modelled patient estimate, which is the
-quantity the brief asks for; CMS utilization is the corroboration, and an
-estimate with no Medicare record behind it is scored down for that reason.
+quantity the brief asks for. A CMS row provides independent utilization context,
+not numerical validation; an estimate with no Medicare row behind it is scored
+down for that reason. Without a vendor row, CMS beneficiaries are the fallback
+quantity and are never relabelled as estimated oncology patients.
 
 Panel fit answers the question the brief actually asks: which physicians see
 patients who benefit from Tempus's *specific* panels. It scores the **match
@@ -152,14 +155,41 @@ site. Ranking individual physicians cannot represent the thing being bought, so
 
 Grouping is by the institution a source **named** for them, falling back to a
 normalised NPPES practice address: suite and floor dropped, adjacent street
-numbers treated as one campus. In live Chicago data that turns 11 physicians
-into 5 accounts, correctly consolidating **6 Northwestern oncologists across two
-buildings** into one conversation.
+numbers treated as one campus. In live Chicago data that turns a 60 physician
+working set into 20 accounts, correctly consolidating **19 University of Chicago
+oncologists** and **15 Northwestern oncologists** into one conversation each.
 
 An objection raised independently by several physicians at one site is
 surfaced as a shared theme, because a repeated concern is usually a pathway
 constraint rather than a personal preference, which is exactly what a CMO can
 act on.
+
+## Who is in the territory
+
+NPPES matches `taxonomy_description` **exactly** against one NUCC taxonomy, so a
+single-taxonomy query is a specialty filter and not a category. The territory is
+therefore built from four queries, deduplicated on NPI, because a physician
+registers several taxonomies and NPPES searches all of them:
+
+| Taxonomy | Chicago actives | In |
+|---|---|---|
+| Hematology & Oncology | 258 | yes |
+| Medical Oncology | 99 | yes |
+| Surgical Oncology | 53 | yes |
+| Gynecologic Oncology | 41 | yes |
+| Radiation Oncology | 88 | no: treats with radiation, rarely the ordering physician for profiling |
+| Pediatric Hematology-Oncology | 90 | no: PMA P210011 states no paediatric validation, so there is no labelled indication |
+
+The live 2026-08-24 smoke check resolved **431 Chicago physicians** after
+deduplication.
+Exclusions are exported as data with their reason attached, not left implicit,
+because a silent exclusion is indistinguishable from a bug.
+
+**The market size and the working set are separate numbers.** Every doctor in a
+bounded working set of 60 enters the CMS queue and batched Open Payments pull;
+geocoding is deduplicated by address. Known, identity-validated CRM/vendor rows
+are ordered first. The header states both market and working-set sizes so a
+request bound cannot be read as the size of the territory.
 
 ## Why now
 
@@ -214,7 +244,7 @@ building. So it enters as one more source to cross-check, not as ground truth,
 and where it disagrees with NPPES the field is marked contested rather than
 reconciled quietly. It supplies `est_annual_oncology_patients`, the only figure
 answering the brief's "likely size of patient population", always labelled an
-estimate and scored 30% lower when no CMS record corroborates it.
+estimate and scored 30% lower when no independent CMS row is present.
 
 ## Knowledge base
 
@@ -252,8 +282,11 @@ worked example; a source was found instead.
 ## Data contract
 
 **Real**: NPPES, CMS Medicare Utilization (2024), CMS Open Payments (2024),
-ClinicalTrials.gov v2, PubMed E-utilities, Wikidata, FDA PMA P210011 and its
+ClinicalTrials.gov v2, PubMed E-utilities on demand, FDA PMA P210011 and its
 SSED, Tempus technical documentation, Tempus AI Form 10-K (FY2025, SEC).
+
+Wikidata appears as a planned entity source but is explicitly labelled not
+queried in this build.
 
 **Simulated**: 12 CRM notes keyed to real NPIs across four markets, written the
 way Salesforce notes actually look. Two are deliberately adversarial and are

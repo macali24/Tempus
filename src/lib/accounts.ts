@@ -34,7 +34,7 @@ export type Account = {
   topScore: number;
   /** Combined CMS beneficiaries across resolved physicians. */
   beneficiaries: number;
-  /** Physicians whose records disagree across sources. */
+  /** Physicians whose records disagree or whose identity confidence is low. */
   contested: number;
   /** Objection themes raised by more than one physician at the site. */
   themes: Array<{ objection: string; count: number }>;
@@ -54,10 +54,28 @@ export function siteKey(address1: string, zip: string): string {
 
 const prettyStreet = (address1: string) => titleCase(address1.replace(SUITE, '').trim());
 
+/**
+ * ClinicalTrials.gov sponsors routinely anonymise a site as "Research Site",
+ * "Local Institution" or "Investigative Site" rather than naming it. These are
+ * placeholders, not institutions: grouping on one merges unrelated hospitals
+ * under a label that names nothing, and showing one tells a rep they are
+ * walking into a building called Research Site. Treated as no assertion.
+ */
+const PLACEHOLDER_FACILITY = /^(research|investigative|clinical|study|trial)\s*(site|center|centre|facility)$|^local institution$|^site\s*\d*$/i;
+
+const cleanInstitution = (value: string): string | undefined => {
+  const name = value.replace(/\s*\(\s*Site\s*\d+\s*\)\s*$/i, '').trim();
+  return name && !PLACEHOLDER_FACILITY.test(name) ? name : undefined;
+};
+
 /** The institution a source named for this physician, if any source did. */
 function namedInstitution(provider: ScoredProvider): string | undefined {
-  const assertion = provider.entity.assertions.find(a => a.field === 'institution');
-  return assertion?.value.replace(/\s*\(\s*Site\s*\d+\s*\)\s*$/i, '').trim() || undefined;
+  for (const assertion of provider.entity.assertions) {
+    if (assertion.field !== 'institution') continue;
+    const name = cleanInstitution(assertion.value);
+    if (name) return name;
+  }
+  return undefined;
 }
 
 export function buildAccounts(providers: ScoredProvider[]): Account[] {
@@ -86,7 +104,7 @@ export function buildAccounts(providers: ScoredProvider[]): Account[] {
     for (const provider of members) {
       for (const assertion of provider.entity.assertions) {
         if (assertion.field !== 'institution') continue;
-        const name = assertion.value.replace(/\s*\(\s*Site\s*\d+\s*\)\s*$/i, '').trim();
+        const name = cleanInstitution(assertion.value);
         if (name) claims.set(name, (claims.get(name) ?? 0) + 1);
       }
     }
@@ -115,7 +133,7 @@ export function buildAccounts(providers: ScoredProvider[]): Account[] {
       providers: [...members].sort((a, b) => b.score - a.score),
       topScore: Math.max(...members.map(p => p.score)),
       beneficiaries: members.reduce((sum, p) => sum + (p.utilization?.beneficiaries ?? 0), 0),
-      contested: members.filter(p => p.consensus.contested > 0).length,
+      contested: members.filter(p => p.consensus.verifyBeforeCalling).length,
       themes: [...objections.entries()]
         .map(([objection, count]) => ({ objection, count }))
         .sort((a, b) => b.count - a.count),

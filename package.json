@@ -9,10 +9,12 @@
     "preview": "vite preview",
     "eval": "tsx scripts/eval.ts",
     "smoke": "tsx scripts/smoke.ts",
+    "smoke:enrichment": "tsx scripts/enrichment-smoke.ts",
     "adversarial": "tsx scripts/adversarial.ts",
     "gate4": "tsx scripts/gate4.ts",
     "verify": "npm run ingest && tsc -b && npm run style && npm run eval && npm run gate4 && npm run adversarial",
     "ingest": "tsx scripts/ingest.ts",
+    "headshots": "tsx scripts/harvest-headshots.ts",
     "style": "tsx scripts/no-em-dash.ts"
   },
   "dependencies": {

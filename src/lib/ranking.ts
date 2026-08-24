@@ -14,8 +14,9 @@
 import { buildConsensus, type ConsensusReport } from './consensus';
 import { resolveEntity, type ResolvedEntity } from './entities';
 import type { PaymentSummary } from './openpayments';
-import { simulatedCrm } from '../data';
-import { marketRecord, maxEstimatedPatients, type MarketRecord } from './market';
+import { crmNoteFor } from '../data';
+import type { LookupStatus } from './fetching';
+import { marketRecordFor, maxEstimatedPatients, type MarketRecord } from './market';
 import type { CmsUtilization, Provider, RankedProvider, Study } from '../types';
 
 export const WEIGHTS = {
@@ -64,6 +65,9 @@ export type PanelFit = {
   rationale: string;
   indicationFit: number;
   testingLikelihood: number;
+  /** Direct fallback score when no vendor tumour mix exists. */
+  taxonomyScore?: number;
+  basis: 'vendor-mix' | 'taxonomy';
 };
 
 /** Academic centres adopt comprehensive profiling faster; a modelled prior. */
@@ -74,7 +78,15 @@ export function panelFit(provider: Provider, market: MarketRecord | undefined, l
     // Live NPPES result with no row in the vendor file. Fall back to taxonomy so
     // the provider still ranks, and say plainly that the mix is unknown.
     const { score, assay, rationale } = taxonomyFit(provider, localTrials);
-    return { eligiblePatients: 0, assay, rationale: `${rationale} No vendor tumour mix on file.`, indicationFit: score / 100, testingLikelihood: 0 };
+    return {
+      eligiblePatients: 0,
+      assay,
+      rationale: `${rationale} No vendor tumour mix on file.`,
+      indicationFit: score / 100,
+      testingLikelihood: 0,
+      taxonomyScore: score,
+      basis: 'taxonomy',
+    };
   }
 
   const { colorectal, lung, breast, heme } = market.mix;
@@ -93,27 +105,27 @@ export function panelFit(provider: Provider, market: MarketRecord | undefined, l
 
   if (solid < 25) {
     return {
-      eligiblePatients, indicationFit, testingLikelihood,
+      eligiblePatients, indicationFit, testingLikelihood, basis: 'vendor-mix',
       assay: 'Limited fit',
       rationale: `${pct(heme)} haematologic mix; xT CDx's labelled intended use is solid malignant neoplasms.`,
     };
   }
   if (market.insufficientTissueRate >= 0.3) {
     return {
-      eligiblePatients, indicationFit, testingLikelihood,
+      eligiblePatients, indicationFit, testingLikelihood, basis: 'vendor-mix',
       assay: 'xF',
       rationale: `${pct(market.insufficientTissueRate * 100)} of cases have inadequate tissue; xF sequences ctDNA from a blood draw when tissue is insufficient.`,
     };
   }
   if (colorectal >= 25) {
     return {
-      eligiblePatients, indicationFit, testingLikelihood,
+      eligiblePatients, indicationFit, testingLikelihood, basis: 'vendor-mix',
       assay: 'xT CDx',
       rationale: `${pct(colorectal)} colorectal mix matches the KRAS companion-diagnostic indication.`,
     };
   }
   return {
-    eligiblePatients, indicationFit, testingLikelihood,
+    eligiblePatients, indicationFit, testingLikelihood, basis: 'vendor-mix',
     assay: 'xT CDx',
     rationale: `${pct(solid)} solid-tumour mix sits inside the labelled intended use.`,
   };
@@ -126,10 +138,12 @@ function taxonomyFit(provider: Provider, localTrials: Study[]): { score: number;
     .join(' ')
     .toLowerCase();
 
-  const solidTumor = /oncology|medical oncology|gynecologic|surgical oncology|radiation/.test(taxonomy);
+  const solidTumor = /oncology|gynecologic/.test(taxonomy);
   const heme = /hematology/.test(taxonomy);
   const benignHemeOnly = heme && !/oncology/.test(taxonomy);
   const pediatric = /pediatric/.test(taxonomy);
+  const surgical = /surgical/.test(taxonomy);
+  const crcSignal = /colorectal|colon|rectal/.test(conditions);
 
   if (benignHemeOnly) {
     return { score: 30, assay: 'xT CDx', rationale: 'Primarily benign haematology; solid-tumour profiling fit is limited.' };
@@ -137,18 +151,31 @@ function taxonomyFit(provider: Provider, localTrials: Study[]): { score: number;
   if (pediatric) {
     return { score: 55, assay: 'xT CDx', rationale: 'Paediatric practice; labelled indications are adult solid tumours.' };
   }
-  if (solidTumor && heme) {
-    const crcSignal = /colorectal|colon|rectal/.test(conditions);
+  if (surgical) {
+    return { score: 78, assay: 'xT CDx', rationale: 'Surgical oncology practice; obtains the specimen but is less often the ordering physician for profiling.' };
+  }
+  // xT CDx's intended use is solid malignant neoplasms, so an exclusively
+  // solid-tumour practice fits it better than a mixed haematology and oncology
+  // one, where a share of the panel is outside the labelled indication. The
+  // previous ordering had this inverted, which was invisible while the NPPES
+  // query returned haematology and oncology alone.
+  if (solidTumor && !heme) {
     return {
       score: crcSignal ? 100 : 88,
       assay: 'xT CDx',
       rationale: crcSignal
-        ? 'Haematology & oncology practice in a market with active colorectal trials, matching the companion diagnostic indication.'
-        : 'Haematology & oncology practice treating solid malignancies.',
+        ? 'Solid-tumour oncology practice in a market with active colorectal trials, matching the companion diagnostic indication.'
+        : 'Solid-tumour oncology practice, wholly inside the labelled intended use.',
     };
   }
-  if (solidTumor) {
-    return { score: 82, assay: 'xT CDx', rationale: 'Solid-tumour oncology practice.' };
+  if (solidTumor && heme) {
+    return {
+      score: crcSignal ? 92 : 82,
+      assay: 'xT CDx',
+      rationale: crcSignal
+        ? 'Haematology and oncology practice in a market with active colorectal trials; the solid-tumour share matches the companion diagnostic indication.'
+        : 'Haematology and oncology practice; the solid-tumour share sits inside the labelled intended use.',
+    };
   }
   return { score: 40, assay: 'xT CDx', rationale: 'Specialty is outside the primary solid-tumour profiling population.' };
 }
@@ -160,13 +187,15 @@ export type RankingInput = {
   trialTotal: number;
   utilization: Record<string, CmsUtilization>;
   payments: Record<string, PaymentSummary>;
+  utilizationStatus?: Record<string, LookupStatus>;
+  paymentStatus?: Record<string, LookupStatus>;
 };
 
 export type ScoredProvider = RankedProvider & {
   marketTrials: number;
   /** Vendor-modelled annual oncology patients. An estimate, never a count. */
   estimatedPatients?: number;
-  /** True when CMS utilization corroborates the vendor estimate. */
+  /** True when both a vendor estimate and an independent CMS row are present. */
   opportunityCorroborated: boolean;
   segment?: string;
   panelFit: number;
@@ -178,10 +207,19 @@ export type ScoredProvider = RankedProvider & {
   entity: ResolvedEntity;
   consensus: ConsensusReport;
   payments?: PaymentSummary;
+  sourceStatus: { utilization?: LookupStatus; payments?: LookupStatus };
   components: Array<{ key: keyof typeof WEIGHTS; label: string; value: number; weight: number; contribution: number }>;
 };
 
-export function rankProviders({ providers, trials, trialTotal, utilization, payments }: RankingInput): ScoredProvider[] {
+export function rankProviders({
+  providers,
+  trials,
+  trialTotal,
+  utilization,
+  payments,
+  utilizationStatus = {},
+  paymentStatus = {},
+}: RankingInput): ScoredProvider[] {
   const maxBeneficiaries = Math.max(...Object.values(utilization).map(u => u.beneficiaries), 1);
 
   const cityTrialsFor = (provider: Provider) => {
@@ -194,7 +232,7 @@ export function rankProviders({ providers, trials, trialTotal, utilization, paym
   // Panel fit is computed for the whole market first so the fit rate can be
   // normalised against the best match actually on the list.
   const fits = new Map<string, PanelFit>(
-    providers.map(p => [p.number, panelFit(p, marketRecord(p.number), cityTrialsFor(p))]),
+    providers.map(p => [p.number, panelFit(p, marketRecordFor(p), cityTrialsFor(p))]),
   );
   const maxRate = Math.max(...[...fits.values()].map(f => f.indicationFit * f.testingLikelihood), 0);
 
@@ -206,18 +244,21 @@ export function rankProviders({ providers, trials, trialTotal, utilization, paym
         provider,
         utilization: utilization[provider.number],
         payments: payments[provider.number],
+        utilizationStatus: utilizationStatus[provider.number],
+        paymentStatus: paymentStatus[provider.number],
         trials,
         publications: [],
       });
       const consensus = buildConsensus(entity);
 
       const cms = utilization[provider.number];
-      const market = marketRecord(provider.number);
+      const market = marketRecordFor(provider);
 
       // Opportunity prefers the vendor's patient-population estimate because it
       // is the quantity the brief asks for. CMS is the fallback and, more
-      // importantly, the corroboration: a vendor estimate with no Medicare
-      // record behind it is scored lower for that reason.
+      // importantly, independent context: a vendor estimate with no Medicare
+      // row behind it is scored lower for that reason. Presence is not numeric
+      // validation, so the UI labels it "CMS row present", not corroborated.
       const fromMarket = market
         ? Math.round((market.estimatedPatients / maxEstimatedPatients) * 100)
         : 0;
@@ -236,11 +277,12 @@ export function rankProviders({ providers, trials, trialTotal, utilization, paym
       // eligible-patient count is still carried for display, where it is the
       // number a rep actually wants to hear.
       const rate = fit.indicationFit * fit.testingLikelihood;
-      const fitScore = maxRate > 0 ? Math.round((rate / maxRate) * 100) : 0;
+      const fitScore = fit.taxonomyScore
+        ?? (maxRate > 0 ? Math.round((rate / maxRate) * 100) : 0);
       // Market-level, so identical for every provider in the same city. Weighted
       // low for that reason and labelled as such in the method panel.
       const trialSignal = Math.min(100, Math.round(Math.log1p(trialTotal) / Math.log1p(800) * 100));
-      const crm = simulatedCrm[provider.number];
+      const crm = crmNoteFor(provider);
       const engagement = crm?.engagement ?? 0;
 
       const updated = provider.basic.last_updated ? new Date(provider.basic.last_updated).getTime() : 0;
@@ -285,6 +327,10 @@ export function rankProviders({ providers, trials, trialTotal, utilization, paym
         entity,
         consensus,
         payments: payments[provider.number],
+        sourceStatus: {
+          utilization: utilizationStatus[provider.number],
+          payments: paymentStatus[provider.number],
+        },
         components,
       };
     })

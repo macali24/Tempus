@@ -1,0 +1,10 @@
+---
+npi: 1831391200
+physician: Jessica Altman
+last_contact: 2026-07-19
+rep: J. Doe
+---
+
+Concerned that ordering and result review could add work for the clinic team. Nurse navigator already stretched. Open to a pilot if onboarding is light.
+
+Interest noted: precision oncology and clinical research.

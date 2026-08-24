@@ -13,15 +13,15 @@
 npi,physician,city,state,specialty,est_annual_oncology_patients,segment,pct_colorectal,pct_lung,pct_breast,pct_heme,insufficient_tissue_rate,practice_address,postal_code,source
 1265689889,Manik Amin,Chicago,IL,Hematology & Oncology,880,Academic,38,12,6,4,0.18,200 N Michigan Ave,60601,Vendor panel model v4
 1033548383,Yasmin Abaza,Chicago,IL,Hematology & Oncology,1420,Academic,3,4,3,78,0.35,200 N Michigan Ave,60601,Vendor panel model v4
-1588184956,Jessica Altman,Chicago,IL,Hematology & Oncology,1180,Academic,6,8,5,62,0.30,200 N Michigan Ave,60601,Vendor panel model v4
-1669122206,Kehinde Adekola,Chicago,IL,Hematology & Oncology,960,Academic,34,10,7,12,0.16,200 N Michigan Ave,60601,Vendor panel model v4
-1114489192,Bilal Anouti,Chicago,IL,Hematology & Oncology,1050,Academic,5,14,6,5,0.22,1400 W Madison St,60607,Vendor panel model v4
-1033562327,Clare Anderson,Chicago,IL,Hematology & Oncology,610,Community,8,10,9,58,0.28,800 S Wabash Ave,60605,Vendor panel model v4
-1245325018,Xavier Andrade-Gonzalez,Chicago,IL,Hematology & Oncology,1290,Academic,18,22,16,14,0.20,1400 W Madison St,60607,Vendor panel model v4
+1831391200,Jessica Altman,Chicago,IL,Hematology & Oncology,1180,Academic,6,8,5,62,0.30,200 N Michigan Ave,60601,Vendor panel model v4
+1306026117,Kehinde Adekola,Chicago,IL,Hematology & Oncology,960,Academic,34,10,7,12,0.16,200 N Michigan Ave,60601,Vendor panel model v4
+1588184956,Bilal Anouti,Chicago,IL,Hematology & Oncology,1050,Academic,5,14,6,5,0.22,1400 W Madison St,60607,Vendor panel model v4
+1669122206,Clare Anderson,Chicago,IL,Hematology & Oncology,610,Community,8,10,9,58,0.28,800 S Wabash Ave,60605,Vendor panel model v4
+1033562327,Xavier Andrade-Gonzalez,Chicago,IL,Hematology & Oncology,1290,Academic,18,22,16,14,0.20,1400 W Madison St,60607,Vendor panel model v4
 1497172845,Ivy Abraham,Chicago,IL,Hematology & Oncology,740,Community,15,20,24,10,0.19,800 S Wabash Ave,60605,Vendor panel model v4
-1114183290,Mebea Aklilu,Boston,MA,Medical Oncology,520,Community,22,26,18,4,0.17,120 Longwood Gate,02215,Vendor panel model v4
-1346473345,Juan Alban,Chicago,IL,Hematology & Oncology,830,Academic,16,18,14,20,0.21,1400 W Madison St,60607,Vendor panel model v4
-1144780107,Solomon Adler,Chicago,IL,Hematology & Oncology,290,Community,12,15,12,22,0.25,800 S Wabash Ave,60605,Vendor panel model v4
+1376527739,Mebea Aklilu,Boston,MA,Medical Oncology,520,Community,22,26,18,4,0.17,120 Longwood Gate,02215,Vendor panel model v4
+1114489192,Juan Alban,Chicago,IL,Hematology & Oncology,830,Academic,16,18,14,20,0.21,1400 W Madison St,60607,Vendor panel model v4
+1043499866,Solomon Adler,Chicago,IL,Hematology & Oncology,290,Community,12,15,12,22,0.25,800 S Wabash Ave,60605,Vendor panel model v4
 1285611954,Gregory Abel,Boston,MA,Pediatric Hematology & Oncology,640,Academic,1,2,1,64,0.40,45 Harbor Point Blvd,02125,Vendor panel model v4
 1366770745,Karim Abou-Nassar,Boston,MA,Hematology & Oncology,910,Academic,2,3,2,82,0.38,45 Harbor Point Blvd,02125,Vendor panel model v4
 1518101096,Wassim Abida,New York,NY,Hematology & Oncology,1360,Academic,4,8,2,3,0.34,300 E 64th St,10065,Vendor panel model v4

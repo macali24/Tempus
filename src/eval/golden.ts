@@ -9,8 +9,8 @@
  * Run: npm run eval
  */
 import { KB, KNOWN_GAPS } from '../lib/kb';
-import { simulatedCrm } from '../data';
-import { MARKET, MARKET_SOURCE_URL, marketProviders } from '../lib/market';
+import { crmNoteFor, simulatedCrm } from '../data';
+import { MARKET, MARKET_SOURCE_URL, marketProviders, marketRecordFor } from '../lib/market';
 import { buildTriggers } from '../lib/triggers';
 import { applyFilters, activeFilterCount, filterOptions, NO_FILTERS } from '../lib/filters';
 import { retrieve } from '../lib/retrieval';
@@ -19,6 +19,8 @@ import { buildConsensus } from '../lib/consensus';
 import { buildAccounts, siteKey } from '../lib/accounts';
 import { panelFit, rankProviders } from '../lib/ranking';
 import { institutionSimilarity, jaroWinkler, resolveEntity } from '../lib/entities';
+import { fetchTrials, fetchUtilization } from '../api';
+import { fetchPaymentsForAll } from '../lib/openpayments';
 import { headshotFor, __test as headshots } from '../lib/headshots';
 import type { Provider, Study } from '../types';
 
@@ -36,7 +38,7 @@ export type Case = {
   id: string;
   group: string;
   description: string;
-  run: () => boolean;
+  run: () => boolean | Promise<boolean>;
 };
 
 /* ------------------------------------------------------- Gate 3: numerics */
@@ -449,8 +451,16 @@ const accountCases: Case[] = [
     description: 'An objection raised by two physicians at one site is surfaced as a shared theme',
     run: () => {
       // Two real Chicago NPIs whose simulated notes both raise tissue requirements.
-      const a = baseProvider({ number: '1033548383', addresses: [{ address_purpose: 'LOCATION', address_1: '675 N SAINT CLAIR ST', city: 'CHICAGO', state: 'IL', postal_code: '60611' }] });
-      const b = baseProvider({ number: '1366770745', addresses: [{ address_purpose: 'LOCATION', address_1: '676 N SAINT CLAIR ST', city: 'CHICAGO', state: 'IL', postal_code: '60611' }] });
+      const a = baseProvider({
+        number: '1033548383',
+        basic: { first_name: 'Yasmin', last_name: 'Abaza', status: 'A' },
+        addresses: [{ address_purpose: 'LOCATION', address_1: '675 N SAINT CLAIR ST', city: 'CHICAGO', state: 'IL', postal_code: '60611' }],
+      });
+      const b = baseProvider({
+        number: '1366770745',
+        basic: { first_name: 'Karim', last_name: 'Abou-Nassar', status: 'A' },
+        addresses: [{ address_purpose: 'LOCATION', address_1: '676 N SAINT CLAIR ST', city: 'CHICAGO', state: 'IL', postal_code: '60611' }],
+      });
       const ranked = rankProviders({ providers: [a, b], trials: [], trialTotal: 0, utilization: {}, payments: {} });
       const [account] = buildAccounts(ranked);
       return account.themes.some(t => t.objection === 'tissue requirements' && t.count === 2);
@@ -482,21 +492,55 @@ const ingestionCases: Case[] = [
   },
   {
     id: 'ing-05', group: 'Ingestion',
-    description: 'The vendor CSV is a resolvable source, joined on NPI',
-    run: () => resolveEntity({ provider: baseProvider({ number: '1265689889' }), trials: [], publications: [] })
+    description: 'The vendor CSV joins only when NPI and physician name agree',
+    run: () => resolveEntity({
+      provider: baseProvider({ number: '1265689889', basic: { first_name: 'Manik', last_name: 'Amin', status: 'A' } }),
+      trials: [], publications: [],
+    })
       .links.some(l => l.source === 'market-csv' && l.matched),
   },
   {
     id: 'ing-06', group: 'Ingestion',
     description: 'A stale vendor city disagrees with NPPES rather than overwriting it',
     run: () => {
-      // The CSV places 1114183290 in Boston; NPPES places them in Chicago.
+      // The vendor row still places Mebea Aklilu in Boston; NPPES places her in Chicago.
       const provider = baseProvider({
-        number: '1114183290',
+        number: '1376527739',
+        basic: { first_name: 'Mebea', last_name: 'Aklilu', status: 'A' },
         addresses: [{ address_purpose: 'LOCATION', address_1: '901 W WELLINGTON AVE', city: 'CHICAGO', state: 'IL', postal_code: '60657' }],
       });
       const report = buildConsensus(resolveEntity({ provider, trials: [], publications: [] }));
       return report.fields.find(f => f.field === 'practiceCity')?.status === 'contested';
+    },
+  },
+  {
+    id: 'ing-07', group: 'Ingestion',
+    description: 'Every CRM and vendor row sharing an NPI names the same physician',
+    run: () => Object.entries(simulatedCrm).every(([npi, note]) => {
+      const market = MARKET.find(row => row.npi === npi);
+      return !market || jaroWinkler(note.physician ?? '', market.physician) >= 0.88;
+    }),
+  },
+  {
+    id: 'ing-08', group: 'Ingestion',
+    description: 'A stale NPI cannot attach Clare Anderson data to Xavier Andrade-Gonzalez',
+    run: () => {
+      const wrong = baseProvider({
+        number: '1669122206',
+        basic: { first_name: 'Xavier', last_name: 'Andrade-Gonzalez', status: 'A' },
+      });
+      return marketRecordFor(wrong) === undefined && crmNoteFor(wrong) === undefined;
+    },
+  },
+  {
+    id: 'ing-09', group: 'Ingestion',
+    description: 'The identity gate tolerates the verified Vahid surname spelling variation',
+    run: () => {
+      const variant = baseProvider({
+        number: '1508958166',
+        basic: { first_name: 'Vahid', last_name: 'AfsharkhargHan', status: 'A' },
+      });
+      return Boolean(marketRecordFor(variant) && crmNoteFor(variant));
     },
   },
 ];
@@ -541,11 +585,17 @@ const filterCases: Case[] = [
   },
   {
     id: 'flt-02', group: 'Filters',
-    description: 'Needs-verifying keeps only providers whose sources disagree',
+    description: 'Needs-verifying keeps low-confidence records even without a source conflict',
     run: () => {
-      const list = rankProviders({ providers: [baseProvider()], trials: [], trialTotal: 0, utilization: {}, payments: {} });
-      const filtered = applyFilters(list, { ...NO_FILTERS, needsVerification: true });
-      return filtered.every(p => p.consensus.contested > 0);
+      const [ranked] = rankProviders({ providers: [baseProvider()], trials: [], trialTotal: 0, utilization: {}, payments: {} });
+      const lowConfidence = {
+        ...ranked,
+        consensus: { ...ranked.consensus, confidence: 40, contested: 0, verifyBeforeCalling: true },
+      };
+      const filtered = applyFilters([lowConfidence], { ...NO_FILTERS, needsVerification: true });
+      return filtered.length === 1
+        && filtered[0].consensus.verifyBeforeCalling
+        && filtered[0].consensus.contested === 0;
     },
   },
   {
@@ -671,6 +721,155 @@ const panelCases: Case[] = [
     description: 'The mock vendor file claims no external source URL it did not come from',
     run: () => MARKET_SOURCE_URL === undefined,
   },
+  {
+    id: 'fit-11', group: 'Panel fit',
+    description: 'A newer doctor without vendor mix receives a nonzero taxonomy fit without an invented patient count',
+    run: () => {
+      const [ranked] = rankProviders({
+        providers: [baseProvider({
+          number: '9999999999',
+          taxonomies: [{ code: '207RX0202X', desc: 'Medical Oncology', primary: true }],
+        })],
+        trials: [], trialTotal: 0, utilization: {}, payments: {},
+      });
+      return ranked.panelFit > 0 && ranked.estimatedPatients === undefined && ranked.panelEligiblePatients === 0;
+    },
+  },
+];
+
+/* -------------------------------------------- all-provider enrichment */
+
+const jsonResponse = (value: unknown) => new Response(JSON.stringify(value), {
+  status: 200,
+  headers: { 'Content-Type': 'application/json' },
+});
+
+async function withFetchMock<T>(mock: typeof fetch, run: () => Promise<T>): Promise<T> {
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = mock;
+  try {
+    return await run();
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+const enrichmentCases: Case[] = [
+  {
+    id: 'api-01', group: 'Enrichment coverage',
+    description: 'All 60 Open Payments NPIs are scheduled in bounded batches, including valid empty results',
+    run: async () => {
+      const npis = Array.from({ length: 60 }, (_, index) => String(2_000_000_000 + index));
+      const requested = new Set<string>();
+      let calls = 0;
+      let active = 0;
+      let maxActive = 0;
+
+      return withFetchMock(async input => {
+        calls++;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        const url = new URL(String(input));
+        url.searchParams.getAll('conditions[0][value][]').forEach(npi => requested.add(npi));
+        await new Promise(resolve => setTimeout(resolve, 2));
+        active--;
+        return jsonResponse({ count: 0, results: [] });
+      }, async () => {
+        const result = await fetchPaymentsForAll(npis);
+        return calls === 6
+          && maxActive <= 2
+          && requested.size === 60
+          && Object.keys(result.records).length === 60
+          && Object.values(result.status).every(status => status === 'empty');
+      });
+    },
+  },
+  {
+    id: 'api-02', group: 'Enrichment coverage',
+    description: 'Open Payments follows DKAN count and offset beyond 500 rows before aggregating',
+    run: async () => {
+      const npi = '2999999999';
+      const offsets: number[] = [];
+      return withFetchMock(async input => {
+        const url = new URL(String(input));
+        const offset = Number(url.searchParams.get('offset')) || 0;
+        offsets.push(offset);
+        const length = offset === 0 ? 500 : 2;
+        const results = Array.from({ length }, () => ({
+          covered_recipient_npi: npi,
+          applicable_manufacturer_or_applicable_gpo_making_payment_name: 'Example Manufacturer',
+          total_amount_of_payment_usdollars: '1',
+          date_of_payment: '2024-06-01',
+        }));
+        return jsonResponse({ count: 502, results });
+      }, async () => {
+        const result = await fetchPaymentsForAll([npi]);
+        const summary = result.records[npi];
+        return offsets.join(',') === '0,500'
+          && summary.records === 502
+          && summary.totalUsd === 502
+          && result.status[npi] === 'found';
+      });
+    },
+  },
+  {
+    id: 'api-03', group: 'Enrichment coverage',
+    description: 'CMS utilization attempts every one of 60 doctors with at most six active requests',
+    run: async () => {
+      const providers = Array.from({ length: 60 }, (_, index) => baseProvider({ number: String(3_000_000_000 + index) }));
+      let calls = 0;
+      let active = 0;
+      let maxActive = 0;
+      return withFetchMock(async input => {
+        calls++;
+        active++;
+        maxActive = Math.max(maxActive, active);
+        const url = new URL(String(input));
+        const npi = url.searchParams.get('filter[Rndrng_NPI]') ?? '';
+        await new Promise(resolve => setTimeout(resolve, 1));
+        active--;
+        return jsonResponse([{
+          Rndrng_NPI: npi,
+          Tot_Benes: '25',
+          Tot_Srvcs: '100',
+          Tot_HCPCS_Cds: '4',
+          Tot_Mdcr_Pymt_Amt: '1234.5',
+          Rndrng_Prvdr_City: 'CHICAGO',
+          Rndrng_Prvdr_State_Abrvtn: 'IL',
+          Rndrng_Prvdr_Type: 'Medical Oncology',
+        }]);
+      }, async () => {
+        const result = await fetchUtilization(providers);
+        return calls === 60
+          && maxActive <= 6
+          && Object.keys(result.records).length === 60
+          && Object.values(result.status).every(status => status === 'found');
+      });
+    },
+  },
+  {
+    id: 'api-04', group: 'Enrichment coverage',
+    description: 'ClinicalTrials follows nextPageToken so provider matching sees every advertised page',
+    run: async () => {
+      let calls = 0;
+      const study = (nctId: string): Study => ({
+        protocolSection: {
+          identificationModule: { nctId, briefTitle: nctId },
+          statusModule: { overallStatus: 'RECRUITING' },
+        },
+      });
+      return withFetchMock(async input => {
+        calls++;
+        const token = new URL(String(input)).searchParams.get('pageToken');
+        return token
+          ? jsonResponse({ totalCount: 3, studies: [study('NCT2'), study('NCT3')] })
+          : jsonResponse({ totalCount: 3, studies: [study('NCT1')], nextPageToken: 'page-2' });
+      }, async () => {
+        const result = await fetchTrials('Chicago', 'IL');
+        return calls === 2 && result.total === 3 && result.studies.length === 3;
+      });
+    },
+  },
 ];
 
 /* --------------------------------------------------- Headshot identity gate */
@@ -742,7 +941,7 @@ const headshotCases: Case[] = [
     description: 'Withholding explains itself rather than silently showing nothing',
     run: () => {
       const withheld = headshotFor(record('1588184956', 'Jessica', 'Altman'));
-      return withheld.kind === 'withheld' && withheld.reason.includes('Bilal Anouti');
+      return withheld.kind === 'withheld' && withheld.reason.includes('Anouti');
     },
   },
 ];
@@ -756,5 +955,6 @@ export const CASES: Case[] = [
   ...numericCases, ...gradeCases, ...injectionCases,
   ...retrievalCases, ...linkageCases, ...consensusCases,
   ...panelCases,
+  ...enrichmentCases,
   ...headshotCases,
 ];

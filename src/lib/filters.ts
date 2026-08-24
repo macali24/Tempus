@@ -14,7 +14,7 @@ import type { ScoredProvider } from './ranking';
 export type Filters = {
   /** Substring match on physician name. */
   query: string;
-  /** Only providers whose sources disagree. */
+  /** Only providers whose sources disagree or whose identity confidence is low. */
   needsVerification: boolean;
   /** Only providers with a CRM note on file. */
   hasNote: boolean;
@@ -39,7 +39,7 @@ export function applyFilters(providers: ScoredProvider[], filters: Filters): Sco
   const query = filters.query.trim().toLowerCase();
   return providers.filter(provider => {
     if (query && !name(provider).includes(query)) return false;
-    if (filters.needsVerification && provider.consensus.contested === 0) return false;
+    if (filters.needsVerification && !provider.consensus.verifyBeforeCalling) return false;
     if (filters.hasNote && !provider.crm) return false;
     if (filters.segment !== 'all' && provider.segment !== filters.segment) return false;
     if (filters.objection !== 'all' && provider.crm?.objection !== filters.objection) return false;

@@ -108,14 +108,14 @@ export function MethodPanel({
         </p>
       </Card>
 
-      <Card title="Data contract" lede="7 sources · 12 simulated notes">
+      <Card title="Data contract" lede="live + on-demand · 12 simulated notes">
         <div className="row-line">
           <Check style={{ color: 'var(--green)' }} />
           <span className="label">
             Real
             <small>
-              NPPES · CMS Medicare utilization · CMS Open Payments · ClinicalTrials.gov · PubMed · Wikidata ·
-              official Tempus documentation
+              NPPES · CMS Medicare utilization · CMS Open Payments · ClinicalTrials.gov · PubMed on demand ·
+              official Tempus documentation. Wikidata is planned but not queried in this build.
             </small>
           </span>
         </div>

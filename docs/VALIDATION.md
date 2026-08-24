@@ -5,13 +5,13 @@ it can gate CI; nothing here is asserted by hand.
 
 ```bash
 npm run verify        # typecheck + all three suites below
-npm run eval          # 65 adversarial golden cases
+npm run eval          # 101 deterministic and adversarial golden cases
 npm run gate4         # cross-model entailment, end to end
 npm run adversarial   # poisoned CRM fixtures, end to end
 npm run smoke         # full pipeline against the live federal APIs
 ```
 
-## Golden set: 82/82 passing
+## Golden set: 101/101 passing
 
 | Group | Cases | What it proves |
 |---|---|---|
@@ -21,12 +21,14 @@ npm run smoke         # full pipeline against the live federal APIs
 | Retrieval | 7 | BM25 recovers exact identifiers ("MSI") that a topical channel alone misses; stemming bridges requirements/require; insufficient-tissue queries surface the liquid-biopsy alternative. |
 | Entity resolution | 6 | Jaro-Winkler separates distinct physicians and tolerates typos above the 0.88 floor. Unmatched sources are recorded, never silently dropped. |
 | Corpus | 6 | The KB is ingested from Markdown with source and access date on every chunk; it contains real quantitative metrics; every headline number appears in its source text; pricing remains a declared gap; turnaround time is answerable and quoted verbatim from an SEC-filed source. |
-| Ingestion | 6 | All three formats parse; objections are extracted from prose with cues retained; the brief's worked example extracts as turnaround time; the vendor CSV resolves on NPI and a stale vendor city is flagged contested rather than overwriting NPPES. |
+| Ingestion | 9 | All three formats parse; objections are extracted from prose with cues retained; local NPI/name pairs agree; stale NPI/name joins are rejected; verified spelling variants still pass. |
 | Triggers | 3 | A 20-month-old payment is not offered as a reason to call now; a payment-derived trigger is never voiced as research; a recent publication outranks a market-wide FDA action. |
 | Accounts | 7 | Suites and floors are ignored when grouping a site; adjacent street numbers form one campus; distinct streets stay distinct; a city-only trial match never names an institution; a ZIP-matching site does; shared objection themes are detected. |
 | Filters | 5 | Name filtering is a case-insensitive substring match; needs-verifying keeps only providers whose sources disagree; has-note keeps only ingested notes; the active-filter count reflects every engaged control; filter options are derived from the loaded market so no option is ever empty. |
 | Consensus | 8 | Case differences are not contradictions; a genuine city change is. Contradictions lower identity confidence and set `verifyBeforeCalling`. |
-| Panel fit | 10 | A colorectal-heavy practice routes to xT CDx on the CDx indication; an inadequate-tissue practice routes to xF; a haematologic practice is marked limited fit; eligible patients never exceed the vendor estimate; fit differentiates providers instead of scoring them alike; fit scores match quality rather than volume, so patient count is not counted twice; the ingested CSV alone produces a correctly ordered ranked list and distinct call-planning sites with no network call; the mock vendor file claims no external source URL. |
+| Panel fit | 11 | Vendor rows use modelled tumour mix; newer rows receive a nonzero taxonomy fit without an invented patient count; eligible patients never exceed a supplied vendor estimate. |
+| Enrichment coverage | 4 | All 60 payment NPIs are batched; CMS concurrency is bounded; DKAN pagination crosses 500 rows; ClinicalTrials follows every page token. |
+| Headshot identity | 11 | Existing photo identity and attribution gates continue to pass unchanged. |
 
 The suite has already earned its place: `con-05` failed on first run because
 consensus warnings surfaced raw NPPES casing ("CHICAGO") in rep-facing copy.
@@ -105,6 +107,53 @@ consensus warnings surfaced raw NPPES casing ("CHICAGO") in rep-facing copy.
    of the ranking weight carried no signal. It is now
    `estimated patients × indication fit × likelihood of testing` over a vendor
    tumour mix, and it names the panel.
+
+15. **The territory query excluded most of the cancer physicians in it, and
+   was skewed against the product.** `fetchProviders` matched a single NUCC
+   taxonomy, "Hematology & Oncology". NPPES matches that field exactly, so
+   Medical Oncology, Gynecologic Oncology and Surgical Oncology never entered:
+   258 of 430 reachable Chicago physicians, and the 172 excluded were
+   disproportionately the solid-tumour oncologists xT CDx's labelled intended
+   use fits best, while the group that was included skews haematologic, which it
+   fits least. The query now spans four taxonomies and deduplicates on NPI.
+   Radiation Oncology and Pediatric Hematology-Oncology stay out, exported with
+   their reason attached rather than silently absent.
+16. **The territory was an alphabetical page.** The same query passed
+   `limit=20` and took whatever NPPES returned, which is sorted by surname, so
+   the live Chicago territory was 11 physicians whose surnames all began with A.
+   It now pages to exhaustion and reports the market size separately from the
+   bounded working set that receives enrichment, so a cost bound cannot be read
+   as a territory size.
+17. **Panel fit ranked mixed practices above the ones the panel fits.**
+   `taxonomyFit` scored a haematology and oncology practice at 88 and a purely
+   solid-tumour practice at 82, for a panel whose intended use is solid
+   malignant neoplasms. The inversion was invisible while the query returned
+   only haematology and oncology. Solid-tumour-only now scores above mixed, and
+   surgical oncology sits below both because it obtains the specimen but is less
+   often the ordering physician.
+18. **"Research Site" was being shown as a hospital.** Trial sponsors anonymise
+   facilities as "Research Site" or "Local Institution"; the account layer took
+   these as named institutions, which both grouped unrelated hospitals together
+   and told a rep the building was called Research Site. Placeholder names are
+   now treated as no assertion. This costs a merge that had been right by
+   accident: the Rush campus was consolidated by the shared placeholder rather
+   than by evidence, and now fragments across 1650, 1725 and 1901 W Harrison
+   until a real source names it.
+19. **Open Payments stopped after the original cohort.** The 60-row working set
+   still called `.slice(0, 12)`, which selected the 11 vendor-known doctors and
+   only one newer doctor. All 60 now enter bounded NPI batches, with successful
+   empty results kept distinct from failed requests.
+20. **Several local NPI keys named a different live doctor.** Eight vendor rows
+   and four Chicago CRM notes could attach modelled metrics or a note to the
+   wrong NPPES identity. The source NPIs were repaired from official NPPES and
+   every local lookup now requires both the NPI and physician name to agree.
+21. **The newer doctors' taxonomy fit was accidentally zero.** The fallback
+   computed a taxonomy score and then multiplied it by a deliberately absent
+   testing-likelihood value. Taxonomy-only rows now carry that direct fit score
+   while eligible-patient count remains unavailable rather than invented.
+22. **Trial matching saw only the first 100 of 751 studies.** The market total
+   was correct, but provider/site and CRM-interest matching used a partial page.
+   The client now follows `nextPageToken` until all advertised studies arrive.
 
 ## Gate 4: cross-model entailment
 

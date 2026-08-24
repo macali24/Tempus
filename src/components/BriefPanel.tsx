@@ -32,6 +32,7 @@ export function BriefPanel({ provider, onAudit }: { provider: ScoredProvider; on
 
   useEffect(() => {
     let live = true;
+    const controller = new AbortController();
     setBusy(true);
     setOpener(null);
     setObjection(null);
@@ -39,7 +40,7 @@ export function BriefPanel({ provider, onAudit }: { provider: ScoredProvider; on
     (async () => {
       // Publications are a per-physician "why now" signal, so they are fetched
       // before generation rather than shown as a separate list.
-      const publications: Publication[] = await fetchPublications(provider).catch(() => []);
+      const publications: Publication[] = await fetchPublications(provider, controller.signal).catch(() => []);
       if (!live) return;
       const [a, b] = await Promise.all([
         generateBrief('script', provider, provider.payments, publications),
@@ -51,7 +52,10 @@ export function BriefPanel({ provider, onAudit }: { provider: ScoredProvider; on
       setBusy(false);
     })();
 
-    return () => { live = false; };
+    return () => {
+      live = false;
+      controller.abort(new DOMException('Superseded provider brief', 'AbortError'));
+    };
   }, [provider.number, nonce]);
 
   const triggers = opener?.triggers ?? [];

@@ -1,10 +1,11 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from 'react';
-import { AlertTriangle, ArrowRight, Building2, FilterX, Info, LocateFixed, MapPin, Phone, Search, User, X } from 'lucide-react';
-import { fetchProviders, fetchTrials, fetchUtilization, geocodeProviders, type TrialResult } from './api';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, ArrowRight, Building2, ChevronDown, FilterX, Info, LocateFixed, MapPin, Phone, Search, Table2, User, X } from 'lucide-react';
+import { fetchProviders, fetchTrials, fetchUtilization, geocodeProviders, ORDERING_TAXONOMIES, type TrialResult } from './api';
 import { fetchPaymentsForAll, type PaymentSummary } from './lib/openpayments';
 import { rankProviders, WEIGHTS, WEIGHT_LABEL, type ScoredProvider } from './lib/ranking';
 import { buildAccounts } from './lib/accounts';
 import { marketProviders } from './lib/market';
+import { selectTerritory, type Territory } from './lib/territory';
 import { applyFilters, activeFilterCount, filterOptions, NO_FILTERS, type Filters } from './lib/filters';
 import { availableProviders, type ProviderId } from './lib/llm';
 import { matchTrialsToInterest } from './lib/triggers';
@@ -14,7 +15,10 @@ import { BriefPanel } from './components/BriefPanel';
 import { NO_AUDIT, type AuditSummary } from './components/AuditCard';
 import { MethodPanel } from './components/MethodPanel';
 import { AccountPanel } from './components/AccountPanel';
+import { Card } from './components/Card';
 import { Headshot, HeadshotCredit } from './components/Headshot';
+import { ProviderTable } from './components/ProviderTable';
+import type { LookupStatus } from './lib/fetching';
 import type { CmsUtilization, Provider, ProviderPoint } from './types';
 
 // Mapbox is ~1.2 MB of the bundle and the map is spatial context, not the
@@ -28,6 +32,7 @@ const DEFAULT_MARKET = { city: 'Chicago', state: 'IL' } as const;
 /** Where the ranked list came from; shown, never inferred. */
 type Source = 'live' | 'demo' | 'none';
 type Mode = 'providers' | 'accounts';
+type WorkspaceView = 'dossier' | 'table';
 
 
 export function App() {
@@ -35,20 +40,32 @@ export function App() {
 
   const [providers, setProviders] = useState<Provider[]>([]);
   const [trials, setTrials] = useState<TrialResult>({ studies: [], total: 0 });
+  const [trialsAvailable, setTrialsAvailable] = useState<boolean | undefined>(undefined);
   const [utilization, setUtilization] = useState<Record<string, CmsUtilization>>({});
   const [payments, setPayments] = useState<Record<string, PaymentSummary>>({});
+  const [utilizationStatus, setUtilizationStatus] = useState<Record<string, LookupStatus>>({});
+  const [paymentStatus, setPaymentStatus] = useState<Record<string, LookupStatus>>({});
+  const [paymentTargets, setPaymentTargets] = useState<Set<string>>(new Set());
   const [points, setPoints] = useState<ProviderPoint[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(true);
+  const [enrichmentLoading, setEnrichmentLoading] = useState(true);
+  // Market size is reported separately from the ranked working set, so its
+  // enrichment bound can never be mistaken for the size of the territory.
+  const [territory, setTerritory] = useState<Territory | null>(null);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [source, setSource] = useState<Source>('live');
   const [selectedNpi, setSelectedNpi] = useState('');
   const [mode, setMode] = useState<Mode>('providers');
+  const [workspaceView, setWorkspaceView] = useState<WorkspaceView>('dossier');
+  const [tableExpanded, setTableExpanded] = useState(false);
   const [accountId, setAccountId] = useState('');
   const [methodOpen, setMethodOpen] = useState(false);
   const [filters, setFilters] = useState<Filters>(NO_FILTERS);
   const [models, setModels] = useState<ProviderId[]>([]);
   const [fitRequest, setFitRequest] = useState(0);
+  const [focusRequest, setFocusRequest] = useState(0);
   // Claim and source counts belong to the brief's pipeline but are read at the
   // top of the page, so the brief reports them up rather than duplicating work.
   const [audit, setAudit] = useState<AuditSummary>(NO_AUDIT);
@@ -61,25 +78,33 @@ export function App() {
         trialTotal: trials.total,
         utilization,
         payments,
+        utilizationStatus,
+        paymentStatus,
       }),
-    [providers, trials, utilization, payments],
+    [providers, trials, utilization, payments, utilizationStatus, paymentStatus],
   );
   const visible = useMemo(() => applyFilters(ranked, filters), [ranked, filters]);
+  const rankByNpi = useMemo(
+    () => new Map(ranked.map((provider, index) => [provider.number, index + 1])),
+    [ranked],
+  );
   const options = useMemo(() => filterOptions(ranked), [ranked]);
   const activeFilters = activeFilterCount(filters);
-  const selected = ranked.find(p => p.number === selectedNpi) ?? visible[0] ?? ranked[0];
+  const selected = visible.find(p => p.number === selectedNpi) ?? visible[0];
   const accounts = useMemo(() => buildAccounts(visible), [visible]);
-  const account = accounts.find(a => a.id === accountId);
+  const account = accounts.find(a => a.id === accountId) ?? (mode === 'accounts' ? accounts[0] : undefined);
   // The account the currently selected physician belongs to, used to fill the
   // context column with colleagues rather than whitespace.
   const selectedAccount = selected ? accounts.find(a => a.providers.some(p => p.number === selected.number)) : undefined;
   const sharedTheme = selectedAccount?.themes.find(t => t.count > 1);
-  const contested = ranked.filter(p => p.consensus.contested > 0).length;
-  const relevantTrials = selected
+  const needsVerification = ranked.filter(p => p.consensus.verifyBeforeCalling).length;
+  const relevantTrials = selected?.crm?.interest && trialsAvailable
     ? matchTrialsToInterest(selected.cityTrials, selected.crm?.interest).length
-    : 0;
-  const mapProviders = account?.providers ?? visible;
-  const mapProviderIds = new Set(mapProviders.map(provider => provider.number));
+    : undefined;
+  // The map remains a territory view even when one account is open. Selection
+  // highlights and moves to that account rather than erasing every other site.
+  const mapProviders = visible;
+  const mapProviderIds = new Set(visible.map(provider => provider.number));
   const mapPoints = points.filter(point => mapProviderIds.has(point.npi));
 
   useEffect(() => {
@@ -88,27 +113,41 @@ export function App() {
 
   useEffect(() => {
     let live = true;
+    const controller = new AbortController();
     (async () => {
       setLoading(true);
       setError('');
       setPoints([]);
+      setLocationsLoading(true);
+      setEnrichmentLoading(true);
+      setTrialsAvailable(undefined);
       setUtilization({});
       setPayments({});
+      setUtilizationStatus({});
+      setPaymentStatus({});
+      setPaymentTargets(new Set());
       // The ingested CSV is the spine of the ranked list; NPPES is enrichment
       // that makes it better, not a dependency that can take it away.
       let found: Provider[];
       let sourceKind: Source = 'live';
+      let scope: Territory | null = null;
       try {
-        found = await fetchProviders(market.city, market.state);
+        const resolved = await fetchProviders(market.city, market.state, controller.signal);
+        scope = selectTerritory(resolved.providers);
+        found = scope.working;
       } catch (e) {
+        if (controller.signal.aborted) return;
         const fallback = marketProviders(market.city, market.state);
         if (!fallback.length) {
           if (!live) return;
           setProviders([]);
           setTrials({ studies: [], total: 0 });
+          setTrialsAvailable(false);
           setError(e instanceof Error ? e.message : 'Public data unavailable.');
           setSource('none');
           setLoading(false);
+          setLocationsLoading(false);
+          setEnrichmentLoading(false);
           return;
         }
         found = fallback;
@@ -117,6 +156,7 @@ export function App() {
 
       if (!live) return;
       setProviders(found);
+      setTerritory(scope);
       setSource(sourceKind);
       setSelectedNpi('');
       setLoading(false);
@@ -124,30 +164,102 @@ export function App() {
       // Enrichment is best-effort and parallel: a failing source degrades one
       // signal rather than the whole territory. allSettled never rejects, so
       // there is no path here that can take the ranked list back down.
-      const [trialResult, utilizationResult, paymentResult, pointResult] = await Promise.allSettled([
-        fetchTrials(market.city, market.state),
-        fetchUtilization(found),
-        fetchPaymentsForAll(found.map(p => p.number).slice(0, 12)),
-        geocodeProviders(found),
+      // Location is its own delivery path. A slow utilization or payment source
+      // must not hold an already-resolved map in the "Locating" state.
+      void geocodeProviders(found, controller.signal)
+        .then(resolvedPoints => {
+          if (!live) return;
+          setPoints(resolvedPoints);
+          setLocationsLoading(false);
+        })
+        .catch(() => {
+          if (!live) return;
+          setPoints([]);
+          setLocationsLoading(false);
+        });
+
+      const targetNpis = found.map(provider => provider.number);
+      setPaymentTargets(new Set(targetNpis));
+      const [trialResult, utilizationResult, paymentResult] = await Promise.allSettled([
+        fetchTrials(market.city, market.state, controller.signal),
+        fetchUtilization(found, controller.signal),
+        fetchPaymentsForAll(targetNpis, controller.signal),
       ]);
       if (!live) return;
       setTrials(trialResult.status === 'fulfilled' ? trialResult.value : { studies: [], total: 0 });
-      setUtilization(utilizationResult.status === 'fulfilled' ? utilizationResult.value : {});
-      setPayments(paymentResult.status === 'fulfilled' ? paymentResult.value : {});
-      setPoints(pointResult.status === 'fulfilled' ? pointResult.value : []);
+      setTrialsAvailable(trialResult.status === 'fulfilled');
+      setUtilization(utilizationResult.status === 'fulfilled' ? utilizationResult.value.records : {});
+      setUtilizationStatus(utilizationResult.status === 'fulfilled' ? utilizationResult.value.status : {});
+      setPayments(paymentResult.status === 'fulfilled' ? paymentResult.value.records : {});
+      setPaymentStatus(paymentResult.status === 'fulfilled' ? paymentResult.value.status : {});
+      setEnrichmentLoading(false);
     })();
     return () => {
       live = false;
+      controller.abort(new DOMException('Superseded territory load', 'AbortError'));
     };
   }, [market]);
 
   useEffect(() => { setAudit(NO_AUDIT); }, [selected?.number]);
   const onAudit = useCallback((summary: AuditSummary) => setAudit(summary), []);
 
+  useEffect(() => {
+    if (!tableExpanded) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setTableExpanded(false);
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [tableExpanded]);
+
+  // A filter can remove the selected row in either workspace. Keep the queue,
+  // dossier and map pointed at the same visible result.
+  useEffect(() => {
+    if (loading || !visible.length) return;
+    if (!visible.some(provider => provider.number === selectedNpi)) {
+      setSelectedNpi(visible[0].number);
+    }
+  }, [loading, visible, selectedNpi]);
+
+  useEffect(() => {
+    if (mode !== 'accounts' || !accounts.length) return;
+    if (!accounts.some(candidate => candidate.id === accountId)) setAccountId(accounts[0].id);
+  }, [mode, accounts, accountId]);
+
+  // A selection can originate from the map, table, account panel or colleague
+  // list. If its queue row is outside the scrollport, bring it to the top so
+  // the selected record is never highlighted somewhere the user cannot see.
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => {
+      const list = document.querySelector<HTMLElement>('.queue-list');
+      const row = list?.querySelector<HTMLElement>('.qrow.on');
+      if (!list || !row) return;
+      const listBox = list.getBoundingClientRect();
+      const rowBox = row.getBoundingClientRect();
+      if (rowBox.top >= listBox.top && rowBox.bottom <= listBox.bottom) return;
+      list.scrollTo({ top: list.scrollTop + rowBox.top - listBox.top - 8, behavior: 'smooth' });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [mode, selectedNpi, accountId, focusRequest]);
+
   const openProvider = useCallback((npi: string) => {
     setAccountId('');
     setMode('providers');
     setSelectedNpi(npi);
+    setFocusRequest(value => value + 1);
+  }, []);
+
+  const openProviderDossier = useCallback((npi: string) => {
+    setWorkspaceView('dossier');
+    setTableExpanded(false);
+    openProvider(npi);
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('.stage-head h1')?.focus());
+  }, [openProvider]);
+
+  const openAccount = useCallback((id: string) => {
+    setMode('accounts');
+    setAccountId(id);
+    setFocusRequest(value => value + 1);
   }, []);
 
   const showProviders = () => {
@@ -155,8 +267,9 @@ export function App() {
     else { setMode('providers'); setAccountId(''); }
   };
   const showAccounts = () => {
-    setMode('accounts');
-    setAccountId((selectedAccount ?? accounts[0])?.id ?? '');
+    const id = (selectedAccount ?? accounts[0])?.id;
+    if (id) openAccount(id);
+    else { setMode('accounts'); setAccountId(''); }
   };
   const toggleVerification = () => {
     const next = !filters.needsVerification;
@@ -164,8 +277,22 @@ export function App() {
     setMode('providers');
     setAccountId('');
     if (next) {
-      const first = ranked.find(provider => provider.consensus.contested > 0);
+      const first = ranked.find(provider => provider.consensus.verifyBeforeCalling);
       if (first) setSelectedNpi(first.number);
+    }
+  };
+
+  const toggleTableView = () => {
+    if (workspaceView === 'table') {
+      setWorkspaceView('dossier');
+      setTableExpanded(false);
+      return;
+    }
+    setWorkspaceView('table');
+    setMode('providers');
+    setAccountId('');
+    if (!visible.some(provider => provider.number === selectedNpi)) {
+      setSelectedNpi(visible[0]?.number ?? '');
     }
   };
 
@@ -176,9 +303,20 @@ export function App() {
           <span className="brand-mark"><img src="/tempus-mark.png" alt="" /></span>
           <span>
             <b>Tempus</b>
-            <span className="brand-sub">Territory copilot</span>
+            <span className="brand-sub">Sales Copilot</span>
           </span>
         </div>
+
+        <button
+          className={`workspace-table-toggle${workspaceView === 'table' ? ' on' : ''}`}
+          onClick={toggleTableView}
+          aria-pressed={workspaceView === 'table'}
+          aria-label="Doctor table view"
+          title={workspaceView === 'table' ? 'Return to doctor profile' : 'Open doctor table'}
+        >
+          <Table2 />
+          <span className="sr-only">Doctor table view</span>
+        </button>
 
         <div className="spacer" />
         <div className="status">
@@ -191,6 +329,15 @@ export function App() {
               Demo data: CSV only
             </span>
           )}
+          {territory && territory.omitted > 0 && (
+            <span
+              className="chip"
+              title={`NPPES resolved ${territory.total} oncology physicians from ${ORDERING_TAXONOMIES.length} configured NUCC taxonomy searches. Ranking and best-effort enrichment run on the first ${territory.working.length}, ordered by whether a CRM note or vendor row already exists for them. The rest remain outside the ranked working set.`}
+            >
+              <span className="dot" />
+              {territory.working.length} of {territory.total} ranked
+            </span>
+          )}
           <button className="btn ghost" onClick={() => setMethodOpen(true)}>
             <Info />
             How this works
@@ -198,7 +345,71 @@ export function App() {
         </div>
       </header>
 
-      <div className="work">
+      <div className={`work${workspaceView === 'table' ? ' table-mode' : ''}${tableExpanded ? ' table-full' : ''}`}>
+        {workspaceView === 'table' ? (
+          <main className={`provider-table-workspace${tableExpanded ? ' expanded' : ''}`}>
+            {!tableExpanded && (
+              <section className="provider-table-map" aria-label={`${market.city} territory map`}>
+                <div className="provider-table-map-label">
+                  <span className="eyebrow">Territory map</span>
+                  <b>{market.city}, {market.state}</b>
+                  <small>{locationsLoading ? `Locating ${visible.length} visible doctors` : `${mapPoints.length} of ${visible.length} visible doctors mapped`}</small>
+                </div>
+                <Suspense fallback={<div className="provider-table-map-loading"><span className="spinner" /> Loading map</div>}>
+                  <TerritoryMap
+                    city={market.city}
+                    state={market.state}
+                    points={mapPoints}
+                    providers={mapProviders}
+                    rankedProviders={ranked}
+                    accounts={accounts}
+                    mode="providers"
+                    selectedNpi={selected?.number}
+                    onSelect={openProvider}
+                    onSelectAccount={openAccount}
+                    onShowProviders={showProviders}
+                    onShowAccounts={showAccounts}
+                    activeFilters={activeFilters}
+                    locating={locationsLoading}
+                    fitRequest={fitRequest}
+                    focusRequest={focusRequest}
+                    layout="overview"
+                    allowExpand={false}
+                  />
+                </Suspense>
+              </section>
+            )}
+
+            {error ? (
+              <div className="provider-table-error">
+                <div className="err"><b>Could not load this market</b><span>{error}</span></div>
+              </div>
+            ) : (
+              <ProviderTable
+                providers={visible}
+                ranked={ranked}
+                territorySize={territory?.total}
+                selectedNpi={selected?.number}
+                mappedNpis={new Set(points.map(point => point.npi))}
+                filters={filters}
+                filterOptions={options}
+                expanded={tableExpanded}
+                loading={loading}
+                enriching={enrichmentLoading}
+                locating={locationsLoading}
+                trialsAvailable={trialsAvailable}
+                paymentTargets={paymentTargets}
+                utilizationStatus={utilizationStatus}
+                paymentStatus={paymentStatus}
+                onFiltersChange={setFilters}
+                onSelect={openProvider}
+                onOpenProfile={openProviderDossier}
+                onToggleExpanded={() => setTableExpanded(value => !value)}
+              />
+            )}
+          </main>
+        ) : (
+          <>
         {/* ------------------------------------------------------ the queue */}
         <aside className="queue">
           <div className="queue-head">
@@ -281,17 +492,17 @@ export function App() {
                 <button
                   key={provider.number}
                   className={`qrow${provider.number === selected?.number && !account ? ' on' : ''}`}
-                  data-top={index + 1}
+                  data-top={rankByNpi.get(provider.number) ?? index + 1}
                   data-band={band(provider.score)}
-                  onClick={() => { setSelectedNpi(provider.number); setAccountId(''); }}
+                  onClick={() => openProvider(provider.number)}
                 >
-                  <span className="qrank">{index + 1}</span>
+                  <span className="qrank">{rankByNpi.get(provider.number) ?? index + 1}</span>
                   <Headshot provider={provider} />
                   <span className="who">
                     <b>{displayName(provider)}</b>
-                    {(provider.estimatedPatients || provider.crm || provider.consensus.contested > 0) && (
+                    {(provider.estimatedPatients || provider.crm || provider.consensus.verifyBeforeCalling) && (
                       <span className="sub">
-                        {provider.consensus.contested > 0 && (
+                        {provider.consensus.verifyBeforeCalling && (
                           <AlertTriangle style={{ width: 11, color: 'var(--amber)', flex: '0 0 auto' }} />
                         )}
                         <span>
@@ -314,7 +525,7 @@ export function App() {
                   <button
                     key={item.id}
                     className={`qrow acct${item.id === accountId ? ' on' : ''}`}
-                    onClick={() => setAccountId(item.id)}
+                    onClick={() => openAccount(item.id)}
                   >
                     <span className="who">
                       <b>{item.probableInstitution?.name ?? item.site}</b>
@@ -347,15 +558,44 @@ export function App() {
           <div className="stage-map">
             <Suspense fallback={null}>
               <TerritoryMap
+                city={market.city}
+                state={market.state}
                 points={mapPoints}
                 providers={mapProviders}
+                rankedProviders={ranked}
+                accounts={accounts}
+                mode={mode}
                 selectedNpi={account ? account.providers[0]?.number : selected?.number}
+                selectedAccountId={account?.id}
                 onSelect={openProvider}
+                onSelectAccount={openAccount}
+                onShowProviders={showProviders}
+                onShowAccounts={showAccounts}
+                activeFilters={activeFilters}
+                locating={locationsLoading}
                 fitRequest={fitRequest}
+                focusRequest={focusRequest}
               />
             </Suspense>
           </div>
           <div className="stage-veil" />
+
+          <aside className="stage-context" aria-label="Territory controls">
+            <TerritoryControl
+              city={market.city}
+              state={market.state}
+              providers={visible.length}
+              accounts={accounts.length}
+              mode={mode}
+              contested={needsVerification}
+              relevantTrials={mode === 'providers' ? relevantTrials : undefined}
+              verificationActive={filters.needsVerification}
+              onProviders={showProviders}
+              onAccounts={showAccounts}
+              onVerification={toggleVerification}
+              onFit={() => setFitRequest(value => value + 1)}
+            />
+          </aside>
 
           {error ? (
             <div className="stage-body">
@@ -375,7 +615,7 @@ export function App() {
                   <div className="dossier">
                     <div className="dossier-id">
                       <span className="eyebrow">Account</span>
-                      <h1>{account.probableInstitution?.name ?? account.site}</h1>
+                      <h1 tabIndex={-1}>{account.probableInstitution?.name ?? account.site}</h1>
                       <dl className="dossier-facts">
                         <div><dt><MapPin /></dt><dd>{account.site}, {account.city}, {account.state} {account.zip}</dd></div>
                         <div><dt>Sites</dt><dd>{account.sites.length}</dd></div>
@@ -403,21 +643,6 @@ export function App() {
                   </div>
                 </div>
 
-                <aside className="stage-context">
-                  <TerritoryControl
-                    city={market.city}
-                    state={market.state}
-                    providers={visible.length}
-                    accounts={accounts.length}
-                    mode={mode}
-                    contested={contested}
-                    verificationActive={filters.needsVerification}
-                    onProviders={showProviders}
-                    onAccounts={showAccounts}
-                    onVerification={toggleVerification}
-                    onFit={() => setFitRequest(value => value + 1)}
-                  />
-                </aside>
               </div>
             </>
           ) : !selected ? (
@@ -439,8 +664,8 @@ export function App() {
                       <HeadshotCredit provider={selected} />
                     </div>
                     <div className="dossier-id">
-                      <span className="eyebrow">#{visible.findIndex(p => p.number === selected.number) + 1 || 1} in {market.city}</span>
-                      <h1>{displayName(selected)}</h1>
+                      <span className="eyebrow">#{rankByNpi.get(selected.number) ?? 1} in the {market.city} working set</span>
+                      <h1 tabIndex={-1}>{displayName(selected)}</h1>
                       <p className="dossier-role">{specialty(selected)}</p>
                       <dl className="dossier-facts">
                         {practiceAddress(selected) && (
@@ -495,8 +720,12 @@ export function App() {
                       target="ev-audit"
                     />
                     <Signal
-                      value={selected.estimatedPatients ? `~${selected.estimatedPatients.toLocaleString()}` : 'n/a'}
-                      label={selected.opportunityCorroborated ? 'est. patients · corroborated' : 'est. patients · unverified'}
+                      value={selected.estimatedPatients
+                        ? `~${selected.estimatedPatients.toLocaleString()}`
+                        : selected.utilization?.beneficiaries.toLocaleString() ?? 'n/a'}
+                      label={selected.estimatedPatients
+                        ? selected.opportunityCorroborated ? 'est. patients · CMS row present' : 'est. patients · unverified model'
+                        : selected.utilization ? 'CMS beneficiaries · fallback' : 'volume unavailable'}
                       target="ev-opportunity"
                       tone={selected.estimatedPatients && !selected.opportunityCorroborated ? 'warn' : undefined}
                     />
@@ -515,6 +744,40 @@ export function App() {
                   <div className="stage-column">
                     <BriefPanel provider={selected} onAudit={onAudit} />
 
+                    {selectedAccount && selectedAccount.providers.length > 1 && (
+                      <div className="same-site-inline">
+                        <Card
+                          title="Same site"
+                          lede={`${selectedAccount.providers.length - 1} colleague${selectedAccount.providers.length === 2 ? '' : 's'} at this account`}
+                        >
+                          <div className="colleagues">
+                            {selectedAccount.providers
+                              .filter(provider => provider.number !== selected.number)
+                              .slice(0, 5)
+                              .map(provider => (
+                                <button key={provider.number} className="colleague" onClick={() => openProvider(provider.number)}>
+                                  <span className="cname">{displayName(provider)}</span>
+                                  {provider.crm && <span className="cobj">{provider.crm.objection}</span>}
+                                  <span className="cscore">{provider.score}</span>
+                                </button>
+                              ))}
+                          </div>
+                          {sharedTheme && (
+                            <div className="shared-theme">
+                              <AlertTriangle />
+                              <span>
+                                <b>{sharedTheme.count} physicians here</b> independently raised “{sharedTheme.objection}”.
+                                That reads as a site-level constraint, worth raising with whoever owns the pathway.
+                              </span>
+                            </div>
+                          )}
+                          <button className="ctx-link" onClick={() => openAccount(selectedAccount.id)}>
+                            Open account view <ArrowRight style={{ width: 13 }} />
+                          </button>
+                        </Card>
+                      </div>
+                    )}
+
                     <div className="section-rule">
                       <span className="eyebrow">Evidence &amp; verification</span>
                       <span>everything the copy above rests on</span>
@@ -524,59 +787,12 @@ export function App() {
                   </div>
                 </div>
 
-                <aside className="stage-context">
-                  <TerritoryControl
-                    city={market.city}
-                    state={market.state}
-                    providers={visible.length}
-                    accounts={accounts.length}
-                    mode={mode}
-                    contested={contested}
-                    relevantTrials={relevantTrials}
-                    verificationActive={filters.needsVerification}
-                    onProviders={showProviders}
-                    onAccounts={showAccounts}
-                    onVerification={toggleVerification}
-                    onFit={() => setFitRequest(value => value + 1)}
-                  />
-
-                  {selectedAccount && selectedAccount.providers.length > 1 && (
-                    <div className="context-card">
-                      <div className="context-head">
-                        <h3>Same site</h3>
-                        <span>{selectedAccount.providers.length - 1} colleague{selectedAccount.providers.length === 2 ? '' : 's'}</span>
-                      </div>
-                      <div className="colleagues">
-                        {selectedAccount.providers
-                          .filter(p => p.number !== selected.number)
-                          .slice(0, 5)
-                          .map(p => (
-                            <button key={p.number} className="colleague" onClick={() => setSelectedNpi(p.number)}>
-                              <span className="cname">{displayName(p)}</span>
-                              {p.crm && <span className="cobj">{p.crm.objection}</span>}
-                              <span className="cscore">{p.score}</span>
-                            </button>
-                          ))}
-                      </div>
-                      {sharedTheme && (
-                        <div className="shared-theme">
-                          <AlertTriangle />
-                          <span>
-                            <b>{sharedTheme.count} physicians here</b> independently raised “{sharedTheme.objection}”.
-                            That reads as a site-level constraint, worth raising with whoever owns the pathway.
-                          </span>
-                        </div>
-                      )}
-                      <button className="ctx-link" onClick={() => { setMode('accounts'); setAccountId(selectedAccount.id); }}>
-                        Open account view <ArrowRight style={{ width: 13 }} />
-                      </button>
-                    </div>
-                  )}
-                </aside>
               </div>
             </>
           )}
         </main>
+          </>
+        )}
       </div>
 
       {methodOpen && (
@@ -635,42 +851,87 @@ function TerritoryControl({
   onVerification: () => void;
   onFit: () => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const control = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const closeOutside = (event: PointerEvent | FocusEvent) => {
+      if (event.target instanceof Node && !control.current?.contains(event.target)) setOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setOpen(false);
+      requestAnimationFrame(() => trigger.current?.focus());
+    };
+    document.addEventListener('pointerdown', closeOutside);
+    document.addEventListener('focusin', closeOutside);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('pointerdown', closeOutside);
+      document.removeEventListener('focusin', closeOutside);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, [open]);
+
+  const run = (action: () => void) => {
+    action();
+    setOpen(false);
+  };
+
   return (
-    <div className="context-card territory-control">
-      <div className="context-head">
-        <h3>{city} territory</h3>
-        <span>{state}</span>
-      </div>
-
-      <div className="territory-modes" role="group" aria-label="Map view">
-        <button className={mode === 'providers' ? 'on' : ''} onClick={onProviders}>
-          <User /><span>Providers</span><b>{providers}</b>
-        </button>
-        <button className={mode === 'accounts' ? 'on' : ''} onClick={onAccounts}>
-          <Building2 /><span>Accounts</span><b>{accounts}</b>
-        </button>
-      </div>
-
-      {relevantTrials !== undefined && (
-        <div className="territory-insight">
-          <b>{relevantTrials}</b>
-          <span>trials match this physician’s stated focus</span>
-        </div>
-      )}
-
+    <div ref={control} className={`territory-control${open ? ' open' : ''}`}>
       <button
-        className={`territory-action${verificationActive ? ' on' : ''}`}
-        onClick={onVerification}
-        disabled={contested === 0}
+        ref={trigger}
+        type="button"
+        className="territory-trigger"
+        aria-expanded={open}
+        aria-controls="territory-tools"
+        aria-haspopup="true"
+        onClick={() => setOpen(value => !value)}
       >
-        <AlertTriangle />
-        <span>{verificationActive ? 'Showing' : 'Show'} records needing verification</span>
-        <b>{contested}</b>
-      </button>
-      <button className="territory-action" onClick={onFit}>
         <LocateFixed />
-        <span>Fit map to current results</span>
+        <span><b>{city} territory</b><small>{state} · map tools</small></span>
+        <ChevronDown />
       </button>
+
+      {open && <div id="territory-tools" className="context-card territory-popover">
+        <div className="context-head">
+          <h3>Map tools</h3>
+          <span>{city}, {state}</span>
+        </div>
+
+        <div className="territory-modes" role="group" aria-label="Map view">
+          <button className={mode === 'providers' ? 'on' : ''} onClick={() => run(onProviders)}>
+            <User /><span>Providers</span><b>{providers}</b>
+          </button>
+          <button className={mode === 'accounts' ? 'on' : ''} onClick={() => run(onAccounts)}>
+            <Building2 /><span>Accounts</span><b>{accounts}</b>
+          </button>
+        </div>
+
+        {relevantTrials !== undefined && (
+          <div className="territory-insight">
+            <b>{relevantTrials}</b>
+            <span>trials match this physician’s stated focus</span>
+          </div>
+        )}
+
+        <button
+          className={`territory-action${verificationActive ? ' on' : ''}`}
+          onClick={() => run(onVerification)}
+          disabled={contested === 0}
+        >
+          <AlertTriangle />
+          <span>{verificationActive ? 'Showing' : 'Show'} records needing verification</span>
+          <b>{contested}</b>
+        </button>
+        <button className="territory-action" onClick={() => run(onFit)}>
+          <LocateFixed />
+          <span>Fit map to current results</span>
+        </button>
+      </div>}
     </div>
   );
 }

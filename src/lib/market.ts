@@ -12,6 +12,7 @@
  */
 import { GENERATED_MARKET } from './market.generated';
 import type { Provider } from '../types';
+import { providerMatchesName } from './matching';
 
 export type MarketRecord = {
   npi: string;
@@ -35,6 +36,12 @@ export const MARKET: MarketRecord[] = GENERATED_MARKET;
 
 const byNpi = new Map(MARKET.map(r => [r.npi, r]));
 export const marketRecord = (npi: string) => byNpi.get(npi);
+
+/** Exact NPI plus a live-name check before a vendor row may affect a doctor. */
+export function marketRecordFor(provider: Provider): MarketRecord | undefined {
+  const record = marketRecord(provider.number);
+  return record && providerMatchesName(provider, record.physician) ? record : undefined;
+}
 
 /**
  * The vendor file is a local mock dataset; it has no public URL, and pointing

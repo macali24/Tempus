@@ -11,8 +11,12 @@
  * match is a match.
  */
 import type { CmsUtilization, Provider, Study } from '../types';
+import type { LookupStatus } from './fetching';
 import type { PaymentSummary } from './openpayments';
-import { marketRecord, MARKET_SOURCE_URL } from './market';
+import { marketRecordFor, MARKET_SOURCE_URL } from './market';
+import { jaroWinkler, NAME_MATCH_FLOOR, providerName } from './matching';
+
+export { jaroWinkler, NAME_MATCH_FLOOR, providerName } from './matching';
 
 export type SourceId = 'nppes' | 'cms-utilization' | 'open-payments' | 'clinicaltrials' | 'pubmed' | 'wikidata' | 'market-csv';
 export type MatchMethod = 'npi-exact' | 'name-affiliation' | 'name-facility' | 'unmatched';
@@ -56,45 +60,6 @@ export const SOURCE_LABEL: Record<SourceId, string> = {
 
 /* ---------------------------------------------------------------- matching */
 
-/** Jaro-Winkler similarity, the standard metric for personal-name linkage. */
-export function jaroWinkler(a: string, b: string): number {
-  const s1 = a.toLowerCase().trim();
-  const s2 = b.toLowerCase().trim();
-  if (!s1 || !s2) return 0;
-  if (s1 === s2) return 1;
-
-  const window = Math.max(0, Math.floor(Math.max(s1.length, s2.length) / 2) - 1);
-  const m1 = new Array<boolean>(s1.length).fill(false);
-  const m2 = new Array<boolean>(s2.length).fill(false);
-  let matches = 0;
-
-  for (let i = 0; i < s1.length; i++) {
-    const start = Math.max(0, i - window);
-    const end = Math.min(i + window + 1, s2.length);
-    for (let j = start; j < end; j++) {
-      if (m2[j] || s1[i] !== s2[j]) continue;
-      m1[i] = m2[j] = true;
-      matches++;
-      break;
-    }
-  }
-  if (!matches) return 0;
-
-  let transpositions = 0;
-  let k = 0;
-  for (let i = 0; i < s1.length; i++) {
-    if (!m1[i]) continue;
-    while (!m2[k]) k++;
-    if (s1[i] !== s2[k]) transpositions++;
-    k++;
-  }
-
-  const jaro = (matches / s1.length + matches / s2.length + (matches - transpositions / 2) / matches) / 3;
-  let prefix = 0;
-  while (prefix < 4 && prefix < s1.length && prefix < s2.length && s1[prefix] === s2[prefix]) prefix++;
-  return jaro + prefix * 0.1 * (1 - jaro);
-}
-
 export const normalizeCity = (value?: string) => (value ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
 
 /** Institution strings differ wildly across sources; strip the noise before comparing. */
@@ -120,9 +85,6 @@ export function institutionSimilarity(a: string, b: string): number {
   return Math.max(jaccard, jaroWinkler(na, nb) * 0.8);
 }
 
-export const providerName = (p: Provider) =>
-  `${p.basic.first_name ?? ''} ${p.basic.last_name ?? ''}`.trim().replace(/\s+/g, ' ');
-
 const NPI_URL = (npi: string) => `https://npiregistry.cms.hhs.gov/provider-view/${npi}`;
 
 /* -------------------------------------------------------------- resolution */
@@ -131,17 +93,16 @@ export type ResolutionInput = {
   provider: Provider;
   utilization?: CmsUtilization;
   payments?: PaymentSummary;
+  utilizationStatus?: LookupStatus;
+  paymentStatus?: LookupStatus;
   trials: Study[];
   publications: Array<{ pmid: string; title: string; affiliation?: string; date?: string; sourceUrl: string }>;
   wikidataMatched?: boolean;
   wikidataUrl?: string;
 };
 
-/** Minimum name similarity before a probabilistic link is accepted at all. */
-export const NAME_MATCH_FLOOR = 0.88;
-
 export function resolveEntity(input: ResolutionInput): ResolvedEntity {
-  const { provider, utilization, payments, trials, publications } = input;
+  const { provider, utilization, payments, trials, publications, utilizationStatus, paymentStatus } = input;
   const npi = provider.number;
   const location = provider.addresses.find(a => a.address_purpose === 'LOCATION') ?? provider.addresses[0];
   const links: SourceLink[] = [];
@@ -168,7 +129,12 @@ export function resolveEntity(input: ResolutionInput): ResolvedEntity {
       assertions.push({ field: 'specialty', value: utilization.specialty, source: 'cms-utilization', confidence: 1, observedAt: String(utilization.year), url: utilization.sourceUrl });
     }
   } else {
-    links.push({ source: 'cms-utilization', matched: false, method: 'unmatched', confidence: 0, detail: 'No Medicare fee-for-service record returned' });
+    const detail = utilizationStatus === 'empty'
+      ? 'Query completed: no 2024 Medicare fee-for-service row for this NPI'
+      : utilizationStatus === 'error'
+        ? 'CMS utilization lookup failed; no zero value was inferred'
+        : 'CMS utilization was not requested for this profile';
+    links.push({ source: 'cms-utilization', matched: false, method: 'unmatched', confidence: 0, detail });
   }
 
   // 3. Open Payments: exact NPI join on covered_recipient_npi.
@@ -177,8 +143,13 @@ export function resolveEntity(input: ResolutionInput): ResolvedEntity {
     if (payments.specialty) {
       assertions.push({ field: 'specialty', value: payments.specialty, source: 'open-payments', confidence: 1, observedAt: payments.latestDate, url: payments.sourceUrl });
     }
+  } else if (payments) {
+    links.push({ source: 'open-payments', matched: false, method: 'unmatched', confidence: 0, detail: `Query completed: no ${payments.year} general-payment records for this NPI`, url: payments.sourceUrl });
   } else {
-    links.push({ source: 'open-payments', matched: false, method: 'unmatched', confidence: 0, detail: 'No industry payments reported for this NPI' });
+    const detail = paymentStatus === 'error'
+      ? 'Open Payments lookup failed; no zero value was inferred'
+      : 'Open Payments was not requested for this profile';
+    links.push({ source: 'open-payments', matched: false, method: 'unmatched', confidence: 0, detail });
   }
 
   // 4. ClinicalTrials.gov: probabilistic, on facility text.
@@ -215,14 +186,14 @@ export function resolveEntity(input: ResolutionInput): ResolvedEntity {
       }
     }
   } else {
-    links.push({ source: 'pubmed', matched: false, method: 'unmatched', confidence: 0, detail: 'No publication passed full-name and affiliation matching' });
+    links.push({ source: 'pubmed', matched: false, method: 'unmatched', confidence: 0, detail: 'PubMed is checked on demand when the provider brief opens' });
   }
 
   // 6. Market intelligence CSV: vendor file, joined on NPI but NOT trusted.
   // It is the input most likely to be stale, so its city and specialty are
   // asserted at reduced confidence and left to disagree with the federal
   // sources rather than being reconciled quietly.
-  const market = marketRecord(npi);
+  const market = marketRecordFor(provider);
   if (market) {
     links.push({
       source: 'market-csv',
@@ -246,7 +217,7 @@ export function resolveEntity(input: ResolutionInput): ResolvedEntity {
   links.push(
     input.wikidataMatched
       ? { source: 'wikidata', matched: true, method: 'npi-exact', confidence: 1, detail: 'P9450 equals this NPI', url: input.wikidataUrl }
-      : { source: 'wikidata', matched: false, method: 'unmatched', confidence: 0, detail: 'No Wikidata item carries this NPI' },
+      : { source: 'wikidata', matched: false, method: 'unmatched', confidence: 0, detail: 'Wikidata is not queried in this build' },
   );
 
   return { npi, displayName: providerName(provider), links, assertions };

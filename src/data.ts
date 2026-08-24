@@ -10,4 +10,14 @@
  * payload and one carries PHI-shaped text. Both are blocked by the validator's
  * input screen and are shown as live demonstrations, not accidents.
  */
-export { GENERATED_CRM as simulatedCrm } from './lib/crm.generated';
+import { GENERATED_CRM } from './lib/crm.generated';
+import { providerMatchesName } from './lib/matching';
+import type { CrmNote, Provider } from './types';
+
+export const simulatedCrm = GENERATED_CRM;
+
+/** Exact NPI plus a live-name check before a CRM note may affect a doctor. */
+export function crmNoteFor(provider: Provider): CrmNote | undefined {
+  const note = simulatedCrm[provider.number];
+  return note && providerMatchesName(provider, note.physician) ? note : undefined;
+}

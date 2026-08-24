@@ -1,5 +1,6 @@
 /** End-to-end pipeline check against live federal APIs. */
-import { fetchProviders, fetchTrials, fetchUtilization } from '../src/api';
+import { fetchProviders, fetchTrials, fetchUtilization, ORDERING_TAXONOMIES } from '../src/api';
+import { selectTerritory } from '../src/lib/territory';
 import { fetchPaymentsForAll } from '../src/lib/openpayments';
 import { rankProviders } from '../src/lib/ranking';
 import { generateBrief } from '../src/lib/generate';
@@ -20,18 +21,22 @@ globalThis.fetch = ((input: any, init?: any) => {
 const city = 'Chicago';
 const state = 'IL';
 
-const providers = await fetchProviders(city, state);
-console.log(`\n  providers            ${providers.length}`);
+const market = await fetchProviders(city, state);
+const { working: providers, total, omitted } = selectTerritory(market.providers);
+console.log(`\n  market               ${total} across ${ORDERING_TAXONOMIES.length} taxonomies`);
+console.log(`  enriched             ${providers.length} (${omitted} beyond the working bound)`);
 
-const [trials, utilization, payments] = await Promise.all([
+const [trials, utilizationBatch, paymentBatch] = await Promise.all([
   fetchTrials(city, state),
   fetchUtilization(providers),
-  fetchPaymentsForAll(providers.map(p => p.number).slice(0, 8)),
+  fetchPaymentsForAll(providers.map(p => p.number)),
 ]);
-console.log(`  recruiting trials    ${trials.total} (page of ${trials.studies.length})`);
-console.log(`  CMS utilization      ${Object.keys(utilization).length}/${providers.length}`);
+const utilization = utilizationBatch.records;
+const payments = paymentBatch.records;
+console.log(`  recruiting trials    ${trials.total} (${trials.studies.length} fetched across all pages)`);
+console.log(`  CMS utilization      ${Object.keys(utilization).length}/${providers.length} rows · ${Object.values(utilizationBatch.status).filter(status => status === 'empty').length} valid empty`);
 const withPayments = Object.values(payments).filter(p => p.records > 0).length;
-console.log(`  open payments        ${withPayments}/${Object.keys(payments).length} with records`);
+console.log(`  open payments        ${Object.keys(paymentBatch.status).length}/${providers.length} attempted · ${withPayments} with records`);
 
 const ranked = rankProviders({ providers, trials: trials.studies, trialTotal: trials.total, utilization, payments });
 console.log(`\n  ranked top 5:`);
