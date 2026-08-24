@@ -20,6 +20,31 @@ function rank(p: Provider, trials: Study[]): RankedProvider {
   return { ...p, exactFit, trialSignal, recency, cityTrials: local, score: Math.round(exactFit*.45 + trialSignal*.40 + recency*.15) };
 }
 
+function popupCard(p: RankedProvider) {
+  const card = document.createElement('div'); card.className = 'popup-card';
+  const location = address(p); const taxonomy = p.taxonomies.find(t=>t.primary)?.desc ?? 'Oncology';
+  const header = document.createElement('div'); header.className = 'popup-heading';
+  const identity = document.createElement('div');
+  const label = document.createElement('small'); label.textContent = 'PUBLIC PROVIDER PROFILE';
+  const title = document.createElement('strong'); title.textContent = name(p);
+  const specialty = document.createElement('span'); specialty.textContent = taxonomy;
+  identity.append(label,title,specialty);
+  const score = document.createElement('b'); score.className = 'popup-score'; score.textContent = String(p.score); score.title = 'Priority score out of 100';
+  header.append(identity,score); card.append(header);
+  const metrics = document.createElement('div'); metrics.className = 'popup-metrics';
+  [[String(p.cityTrials.length),'Recruiting trials'],[`${p.exactFit}%`,'Specialty fit'],[p.basic.last_updated ?? '—','NPI updated']].forEach(([value,key])=>{const item=document.createElement('div');const b=document.createElement('b');b.textContent=value;const s=document.createElement('span');s.textContent=key;item.append(b,s);metrics.append(item)});card.append(metrics);
+  const details = document.createElement('div'); details.className = 'popup-details';
+  const addressLine = document.createElement('p'); addressLine.textContent = `${location?.address_1 ?? ''}, ${location?.city ?? ''}, ${location?.state ?? ''}`;
+  details.append(addressLine);
+  if(location?.telephone_number){const phone=document.createElement('a');phone.href=`tel:${location.telephone_number}`;phone.textContent=location.telephone_number;details.append(phone)}
+  card.append(details);
+  const note=document.createElement('p');note.className='popup-note';note.textContent=`Priority: 45% specialty fit · 40% local trial activity · 15% NPI recency.`;card.append(note);
+  const sources=document.createElement('div');sources.className='popup-sources';
+  const npi=document.createElement('a');npi.href=`${NPI_SOURCE}provider-view/${p.number}`;npi.target='_blank';npi.rel='noreferrer';npi.textContent=`NPI ${p.number} ↗`;
+  const trials=document.createElement('a');trials.href='https://clinicaltrials.gov/';trials.target='_blank';trials.rel='noreferrer';trials.textContent='Trial source ↗';sources.append(npi,trials);card.append(sources);
+  return card;
+}
+
 export function App() {
   const [city,setCity] = useState('Chicago'); const [state,setState] = useState('IL');
   const [query,setQuery] = useState({city:'Chicago',state:'IL'}); const [providers,setProviders] = useState<Provider[]>([]);
@@ -66,7 +91,7 @@ function TerritoryMap({points,providers,selectedNpi,onSelect}:{points:ProviderPo
   const fitTerritory=()=>{if(!map.current||!points.length)return;popup.current?.remove();const bounds=new mapboxgl.LngLatBounds();points.forEach(p=>bounds.extend([p.longitude,p.latitude]));map.current.fitBounds(bounds,{padding:80,maxZoom:10.5,pitch:0,bearing:0,duration:900})};
   useEffect(()=>{if(!node.current||map.current)return; mapboxgl.accessToken=MAPBOX_TOKEN;map.current=new mapboxgl.Map({container:node.current,style:'mapbox://styles/mapbox/standard',config:{basemap:{theme:'default',lightPreset:'dawn',show3dObjects:false,showPointOfInterestLabels:true}},center:[-87.6298,41.8781],zoom:10.2,pitch:0,bearing:0,dragRotate:false,pitchWithRotate:false,attributionControl:false});map.current.touchZoomRotate.disableRotation();map.current.addControl(new mapboxgl.NavigationControl({showCompass:false,visualizePitch:false}),'bottom-right');map.current.addControl(new mapboxgl.GeolocateControl({positionOptions:{enableHighAccuracy:true},trackUserLocation:true}),'bottom-right');map.current.addControl(new mapboxgl.FullscreenControl(),'bottom-right');return()=>{map.current?.remove();map.current=null}},[]);
   useEffect(()=>{if(!map.current||!points.length)return;markers.current.forEach(m=>m.remove());markers.current.clear();const duplicates=new Map<string,number>();points.forEach(point=>{const key=`${point.longitude},${point.latitude}`;const offset=duplicates.get(key)??0;duplicates.set(key,offset+1);const angle=offset*2.4;const radius=offset?0.00035*Math.ceil(offset/2):0;const coords:[number,number]=[point.longitude+Math.cos(angle)*radius,point.latitude+Math.sin(angle)*radius];const p=providers.find(x=>x.number===point.npi);const el=document.createElement('button');el.className='map-marker';el.innerHTML=`<span>${p?.score??''}</span>`;el.setAttribute('aria-label',p?name(p):'Provider');el.onclick=()=>onSelect(point.npi);const marker=new mapboxgl.Marker({element:el}).setLngLat(coords).addTo(map.current!);markers.current.set(point.npi,marker)});fitTerritory()},[points,providers,onSelect]);
-  useEffect(()=>{markers.current.forEach((marker,npi)=>marker.getElement().classList.toggle('active',npi===selectedNpi));if(!selectedNpi||!map.current)return;const marker=markers.current.get(selectedNpi);const p=providers.find(x=>x.number===selectedNpi);if(!marker||!p)return;const coords=marker.getLngLat();map.current.flyTo({center:coords,zoom:12.8,pitch:0,bearing:0,duration:850,essential:true});popup.current?.remove();popup.current=new mapboxgl.Popup({offset:30,closeButton:false,className:'provider-popup'}).setLngLat(coords).setHTML(`<strong>${name(p)}</strong><span>${p.taxonomies.find(t=>t.primary)?.desc??'Oncology'}</span><small>${address(p)?.address_1}</small>`).addTo(map.current)},[selectedNpi,providers]);
+  useEffect(()=>{markers.current.forEach((marker,npi)=>marker.getElement().classList.toggle('active',npi===selectedNpi));if(!selectedNpi||!map.current)return;const marker=markers.current.get(selectedNpi);const p=providers.find(x=>x.number===selectedNpi);if(!marker||!p)return;const coords=marker.getLngLat();map.current.flyTo({center:coords,zoom:12.8,pitch:0,bearing:0,duration:850,essential:true});popup.current?.remove();popup.current=new mapboxgl.Popup({offset:30,closeButton:true,className:'provider-popup',maxWidth:'340px'}).setLngLat(coords).setDOMContent(popupCard(p)).addTo(map.current)},[selectedNpi,providers]);
   return <div className="map-frame"><div ref={node} className="map"/><div className="map-tools"><button onClick={fitTerritory} title="Show all providers"><RotateCcw/> Reset view</button><button onClick={()=>map.current?.getContainer().querySelector<HTMLButtonElement>('.mapboxgl-ctrl-geolocate')?.click()} title="Find my location"><LocateFixed/> Near me</button></div></div>;
 }
 
