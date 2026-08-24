@@ -1,0 +1,6 @@
+# Build inputs live in kb/, data/ and public/; these are not part of the site.
+deliverables/
+slides/
+docs/
+.tsbuild/
+*.tsbuildinfo
