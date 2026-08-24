@@ -8,3 +8,7 @@ dist/
 src/lib/kb.generated.ts
 src/lib/crm.generated.ts
 src/lib/market.generated.ts
+
+# macOS/iCloud sync conflict copies: "territory 2.ts", "headshot 3.jpg".
+# This repo lives under ~/Documents, which iCloud syncs.
+* [0-9].*
