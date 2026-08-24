@@ -53,6 +53,11 @@ export async function fetchPublications(provider: Provider): Promise<Publication
   const data=await summary.json(); return ids.map(id=>({pmid:id,title:data.result?.[id]?.title??'Untitled publication',date:data.result?.[id]?.pubdate,sourceUrl:`https://pubmed.ncbi.nlm.nih.gov/${id}/`}));
 }
 
+export async function sendSlackAlert(payload:{provider:string;npi:string;rank:number;score:number;reason:string;profileUrl:string}){
+  const response=await fetch('/api/slack',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.error??`Slack returned ${response.status}`);return data;
+}
+
 export async function geocodeProviders(providers: Provider[]): Promise<ProviderPoint[]> {
   const coordinateCache = new Map<string, Promise<[number, number] | null>>();
   const points = await Promise.all(providers.slice(0, 10).map(async provider => {

@@ -41,6 +41,20 @@ This prototype intentionally does not claim patient volume, prescribing behavior
 
 See [Phase 1 validation](docs/VALIDATION.md) for the test matrix.
 
+## Phase 2 outcome learning
+
+- The deterministic evidence score remains the production rank.
+- A logistic-regression model runs in shadow mode and shows propensity, uncertainty, feature contributions, accuracy, and Brier score.
+- Twelve bootstrap outcomes are explicitly simulated; user-entered meeting outcomes are stored locally and counted separately.
+- Provider watchlists and score snapshots persist in browser storage.
+- Next-best actions follow evidence availability and objection risk.
+- Slack alerts require a top-five provider, score ≥70, score increase ≥10, confidence ≥70, and active market trials.
+- Slack payloads contain public provider evidence only—never CRM text or PHI.
+
+Set `SLACK_WEBHOOK_URL` in `.env.local` to enable incoming-webhook delivery. The secret is read only by the local Vite server and is never included in the client bundle.
+
+See [Phase 2 model and governance](docs/PHASE2.md).
+
 Map tools include provider fly-to and evidence popups, reset-to-territory, user geolocation, fullscreen mode, zoom, pitch, and rotation. These use Mapbox GL's free client controls and require no additional paid tooling.
 
 ## Important limitation
