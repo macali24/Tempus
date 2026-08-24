@@ -14,7 +14,10 @@ export type Study = {
   };
 };
 
-export type RankedProvider = Provider & { score: number; exactFit: number; trialSignal: number; recency: number; cityTrials: Study[] };
+export type CmsUtilization = { beneficiaries: number; services: number; hcpcsCodes: number; medicarePayment: number; year: number; sourceUrl: string };
+export type CrmNote = { objection: string; interest: string; note: string; lastContact: string; engagement: number; simulated: true };
+export type Publication = { pmid: string; title: string; date?: string; sourceUrl: string };
+export type RankedProvider = Provider & { score: number; opportunity: number; exactFit: number; trialSignal: number; engagement: number; recency: number; confidence: number; cityTrials: Study[]; utilization?: CmsUtilization; crm?: CrmNote };
 
 export type ProviderPoint = { npi: string; longitude: number; latitude: number };
 export type ProviderPhoto = { url: string; sourceUrl: string };

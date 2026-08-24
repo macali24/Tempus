@@ -24,9 +24,22 @@ No source records are mocked or stored in the repository. If either live API fai
 
 ## Ranking
 
-`Priority = 45% oncology specialty fit + 40% local recruiting-trial signal + 15% NPI record recency`
+`Priority = 40% CMS opportunity + 15% local trial activity + 15% simulated CRM engagement + 15% NPI freshness + 15% evidence confidence`
+
+CMS opportunity is normalized within the current market using the logarithm of 2024 Original Medicare beneficiary counts. It is an opportunity proxy, not total patient volume. Missing CMS or CRM data lowers the score rather than being imputed.
 
 This prototype intentionally does not claim patient volume, prescribing behavior, CRM sentiment, or institutional affiliation because those fields are not supported by the public APIs.
+
+## Phase 1 evidence workflow
+
+- Eight simulated CRM records are keyed to real Chicago NPIs and visibly labeled `SIMULATED`.
+- Objection responses retrieve from a small curated knowledge base of official Tempus xT CDx claims.
+- Unsupported concerns return “insufficient evidence”; no metric is invented.
+- Meeting scripts combine displayed CMS, trial, CRM, and Tempus evidence and require human review.
+- PubMed results require a full-author-name and city-affiliation match.
+- The in-app **Evidence & assumptions** model card documents weights, safeguards, and limitations.
+
+See [Phase 1 validation](docs/VALIDATION.md) for the test matrix.
 
 Map tools include provider fly-to and evidence popups, reset-to-territory, user geolocation, fullscreen mode, zoom, pitch, and rotation. These use Mapbox GL's free client controls and require no additional paid tooling.
 
