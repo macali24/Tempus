@@ -1,0 +1,493 @@
+<title>Tempus Sales Copilot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+:root{
+  --paper:#EEF1F5;
+  --card:#FFFFFF;
+  --ink:#11151B;
+  --ink-2:#3D4854;
+  --ink-3:#6B7683;
+  --rule:#DCE2E9;
+  --rule-soft:#E9EDF2;
+  --accent:#2E3FBE;
+  --accent-soft:#EDEFFC;
+  --amber:#9A6B12;
+  --amber-soft:#FBF2DF;
+  --green:#186B4F;
+  --green-soft:#E4F2EC;
+  --shadow:0 1px 2px rgba(17,21,27,.05),0 12px 32px rgba(17,21,27,.07);
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --paper:#0B0E13; --card:#141920; --ink:#E9EDF3; --ink-2:#B3BDC9; --ink-3:#7E8996;
+    --rule:#28303A; --rule-soft:#1E252E;
+    --accent:#8E9CFF; --accent-soft:#1B2140;
+    --amber:#D9A94F; --amber-soft:#2C2415;
+    --green:#5CC49B; --green-soft:#15291F;
+    --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 34px rgba(0,0,0,.45);
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#0B0E13; --card:#141920; --ink:#E9EDF3; --ink-2:#B3BDC9; --ink-3:#7E8996;
+  --rule:#28303A; --rule-soft:#1E252E;
+  --accent:#8E9CFF; --accent-soft:#1B2140;
+  --amber:#D9A94F; --amber-soft:#2C2415;
+  --green:#5CC49B; --green-soft:#15291F;
+  --shadow:0 1px 2px rgba(0,0,0,.4),0 14px 34px rgba(0,0,0,.45);
+}
+
+*{box-sizing:border-box}
+ul,ol{margin:0;padding:0}
+figure ul{margin:0}
+body{
+  background:var(--paper);
+  color:var(--ink);
+  font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+  -webkit-font-smoothing:antialiased;
+  padding:clamp(16px,3vw,48px) clamp(12px,3vw,48px) 64px;
+}
+
+.rail{
+  max-width:1280px;margin:0 auto 22px;
+  display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap;
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:11px;letter-spacing:.09em;
+  text-transform:uppercase;color:var(--ink-3);
+}
+.rail strong{color:var(--ink);font-weight:600}
+.print{
+  font:inherit;letter-spacing:.09em;text-transform:uppercase;
+  background:none;border:1px solid var(--rule);border-radius:2px;
+  color:var(--ink-2);padding:5px 11px;cursor:pointer;
+}
+.print:hover{border-color:var(--accent);color:var(--accent)}
+.print:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.deck{max-width:1280px;margin:0 auto;display:flex;flex-direction:column;gap:clamp(16px,2.4vw,34px)}
+
+.slide{
+  container-type:size;
+  aspect-ratio:16/9;width:100%;
+  background:var(--card);border:1px solid var(--rule);border-radius:3px;
+  box-shadow:var(--shadow);
+  padding:3.7cqw 4cqw 3.2cqw;
+  display:flex;flex-direction:column;
+  position:relative;overflow:hidden;
+}
+
+/* ---- slide header ---- */
+.eyebrow{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:1.02cqw;font-weight:500;letter-spacing:.16em;text-transform:uppercase;
+  color:var(--accent);
+  display:flex;align-items:center;gap:.8cqw;
+}
+.eyebrow .num{
+  color:var(--ink-3);
+}
+.eyebrow .num::after{content:"";display:inline-block;width:1.6cqw;height:1px;background:var(--rule);margin:0 .1cqw 0 .8cqw;vertical-align:middle}
+h1{
+  font-family:"IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;
+  font-weight:600;font-size:3.05cqw;line-height:1.09;letter-spacing:-.012em;
+  margin:1.1cqw 0 0;max-width:44ch;text-wrap:balance;
+}
+h1 em{font-style:normal;color:var(--accent)}
+.sub{
+  margin:.85cqw 0 0;font-size:1.24cqw;line-height:1.48;color:var(--ink-2);max-width:62ch;
+}
+
+/* ---- shared body ---- */
+.body{margin-top:2cqw;display:grid;gap:2.6cqw;flex:1;min-height:0}
+.cols-58{grid-template-columns:1.32fr 1fr}
+.cols-64{grid-template-columns:1.75fr 1fr}
+.cols-11{grid-template-columns:1fr 1fr}
+.col{display:flex;flex-direction:column;gap:1.5cqw;min-width:0}
+
+.lede{font-size:1.28cqw;line-height:1.55;color:var(--ink-2)}
+.lede b{color:var(--ink);font-weight:600}
+
+/* ---- question / label lists ---- */
+.qlist{display:flex;flex-direction:column;gap:0;border-top:1px solid var(--rule)}
+.qlist li{
+  list-style:none;display:grid;grid-template-columns:9.4cqw 1fr;gap:1.4cqw;
+  padding:1.05cqw 0;border-bottom:1px solid var(--rule-soft);align-items:baseline;
+}
+.qlist .k{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:.98cqw;letter-spacing:.13em;text-transform:uppercase;color:var(--ink);font-weight:600;
+}
+.qlist .v{font-size:1.2cqw;line-height:1.45;color:var(--ink-2)}
+
+/* ---- thesis ---- */
+.thesis{
+  border-left:2px solid var(--accent);background:var(--accent-soft);
+  padding:1.3cqw 1.5cqw;border-radius:0 2px 2px 0;
+}
+.thesis p{margin:0;font-size:1.16cqw;line-height:1.5;color:var(--ink-2)}
+.thesis .hd{
+  font-family:"IBM Plex Sans Condensed","IBM Plex Sans",sans-serif;
+  font-size:1.55cqw;font-weight:600;color:var(--ink);margin:0 0 .5cqw;letter-spacing:-.005em;
+}
+
+.foot{
+  margin-top:auto;padding-top:1.1cqw;border-top:1px solid var(--rule);
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:.94cqw;letter-spacing:.045em;color:var(--ink-3);line-height:1.5;
+}
+.foot b{color:var(--ink-2);font-weight:500}
+
+/* ---- figures ---- */
+figure{margin:0;flex:1;display:flex;flex-direction:column;gap:.7cqw;min-height:0}
+.shot{
+  border:1px solid var(--rule);border-radius:2px;overflow:hidden;background:var(--paper);
+  flex:1;min-height:0;display:flex;
+}
+.shot img{width:100%;height:100%;object-fit:cover;object-position:top left;display:block}
+.shot.contain img{object-fit:contain;object-position:center}
+.shot.missing{align-items:center;justify-content:center;border-style:dashed}
+.shot.missing img{display:none}
+.shot.missing::after{
+  content:attr(data-slot);
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:1cqw;letter-spacing:.1em;
+  text-transform:uppercase;color:var(--ink-3);text-align:center;padding:2cqw;line-height:1.9;white-space:pre-line;
+}
+figcaption{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;
+  font-size:.92cqw;letter-spacing:.06em;color:var(--ink-3);line-height:1.5;
+}
+
+/* ---- callout grid (slide 2) ---- */
+.calls{display:grid;grid-template-columns:1fr;gap:0;border-top:1px solid var(--rule)}
+.calls li{list-style:none;padding:.74cqw 0;border-bottom:1px solid var(--rule-soft)}
+.calls .k{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.95cqw;font-weight:600;
+  letter-spacing:.13em;text-transform:uppercase;color:var(--accent);display:block;margin-bottom:.3cqw;
+}
+.calls .v{font-size:1.05cqw;line-height:1.42;color:var(--ink-2)}
+
+/* ---- pipeline strip ---- */
+.pipe{display:flex;align-items:stretch;gap:.55cqw;flex-wrap:nowrap}
+.pipe .step{
+  flex:1;border:1px solid var(--rule);border-radius:2px;padding:.85cqw .8cqw;background:var(--paper);
+  display:flex;flex-direction:column;gap:.28cqw;min-width:0;
+}
+.pipe .t{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.85cqw;font-weight:600;
+  letter-spacing:.1em;text-transform:uppercase;color:var(--ink);
+}
+.pipe .d{font-size:.92cqw;line-height:1.35;color:var(--ink-3)}
+.pipe .arrow{align-self:center;color:var(--ink-3);font-size:1.1cqw;flex:0 0 auto}
+
+/* ---- weights bar ---- */
+.weights{display:flex;height:1.5cqw;border-radius:2px;overflow:hidden;border:1px solid var(--rule)}
+.weights span{display:block}
+.wkey{display:flex;flex-wrap:wrap;gap:.35cqw 1.3cqw;margin-top:.7cqw}
+.wkey li{
+  list-style:none;display:flex;align-items:center;gap:.45cqw;
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.9cqw;color:var(--ink-2);
+  font-variant-numeric:tabular-nums;
+}
+.wkey i{width:.62cqw;height:.62cqw;border-radius:1px;display:block;flex:0 0 auto}
+.wkey b{color:var(--ink);font-weight:600}
+
+/* ---- notes ---- */
+.notes li{list-style:none;padding-left:1.35cqw;position:relative;font-size:1.11cqw;line-height:1.45;color:var(--ink-2);margin-bottom:.7cqw}
+.notes li::before{content:"";position:absolute;left:0;top:.62cqw;width:.5cqw;height:.5cqw;background:var(--accent);border-radius:50%}
+.notes b{color:var(--ink);font-weight:600}
+
+/* ---- code ---- */
+pre{
+  margin:0;background:var(--paper);border:1px solid var(--rule);border-radius:2px;
+  padding:1cqw 1.1cqw;overflow-x:auto;
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.88cqw;line-height:1.62;color:var(--ink-2);
+  white-space:pre-wrap;
+}
+pre .c{color:var(--ink-3)}
+pre .hi{color:var(--accent);font-weight:500}
+.codecap{font-size:1.05cqw;line-height:1.45;color:var(--ink-2)}
+.codecap b{color:var(--ink);font-weight:600}
+
+/* ---- gates table ---- */
+.gates{width:100%;border-collapse:collapse;font-size:.98cqw}
+.gates th{
+  text-align:left;font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.85cqw;
+  letter-spacing:.12em;text-transform:uppercase;color:var(--ink-3);font-weight:500;
+  padding:0 .8cqw .55cqw 0;border-bottom:1px solid var(--rule);
+}
+.gates td{padding:.56cqw .8cqw .56cqw 0;border-bottom:1px solid var(--rule-soft);vertical-align:top;color:var(--ink-2);line-height:1.4}
+.gates td:first-child{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;color:var(--ink);font-weight:600;width:1.8cqw;
+}
+.gates .g{font-weight:600;color:var(--ink);display:block}
+.gates .when{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.82cqw;letter-spacing:.06em;white-space:nowrap;color:var(--ink-3)}
+
+/* ---- metric row ---- */
+.metrics{display:flex;gap:0;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.metrics div{flex:1;padding:.95cqw 1.1cqw .95cqw 0}
+.metrics div + div{padding-left:1.1cqw;border-left:1px solid var(--rule-soft)}
+.metrics .n{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:1.85cqw;font-weight:600;
+  color:var(--ink);letter-spacing:-.02em;font-variant-numeric:tabular-nums;display:block;
+}
+.metrics .n.pass{color:var(--green)}
+.metrics .l{font-size:.92cqw;line-height:1.35;color:var(--ink-3);margin-top:.25cqw;display:block}
+
+/* ---- two-tone lists (slide 5) ---- */
+.hd2{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.95cqw;font-weight:600;
+  letter-spacing:.14em;text-transform:uppercase;padding-bottom:.55cqw;border-bottom:1px solid var(--rule);
+}
+.hd2.a{color:var(--accent)}
+.hd2.b{color:var(--amber)}
+.tight li{list-style:none;padding:.72cqw 0;border-bottom:1px solid var(--rule-soft);font-size:1.06cqw;line-height:1.42;color:var(--ink-2)}
+.tight b{color:var(--ink);font-weight:600}
+
+.access{
+  display:grid;grid-template-columns:auto 1fr;gap:.6cqw 1.4cqw;align-items:baseline;
+  background:var(--green-soft);border-left:2px solid var(--green);padding:1.1cqw 1.4cqw;border-radius:0 2px 2px 0;
+}
+.access dt{
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.88cqw;letter-spacing:.11em;
+  text-transform:uppercase;color:var(--green);font-weight:600;
+}
+.access dd{margin:0;font-size:1.04cqw;line-height:1.4;color:var(--ink-2)}
+.access code{font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.96cqw;color:var(--ink)}
+
+.flag{
+  display:inline-flex;align-items:center;gap:.45cqw;background:var(--amber-soft);color:var(--amber);
+  font-family:"IBM Plex Mono",ui-monospace,monospace;font-size:.85cqw;font-weight:600;
+  letter-spacing:.09em;text-transform:uppercase;padding:.3cqw .6cqw;border-radius:2px;
+}
+
+@media print{
+  body{background:#fff;padding:0}
+  .rail{display:none}
+  .deck{gap:0;max-width:none}
+  .slide{
+    border:none;border-radius:0;box-shadow:none;background:#fff;
+    width:100%;aspect-ratio:16/9;break-after:page;page-break-after:always;
+  }
+  .slide:last-child{break-after:auto;page-break-after:auto}
+}
+@page{size:1600px 900px;margin:0}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+
+<div class="rail">
+  <span><strong>Tempus Sales Copilot</strong> &nbsp;/&nbsp; case study, five slides</span>
+  <button class="print" onclick="window.print()">Save as PDF</button>
+</div>
+
+<div class="deck">
+
+<!-- ============================ 01 ============================ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">01</span> The problem</div>
+  <h1>431 oncologists in Chicago. Which ten do you call on Monday?</h1>
+  <p class="sub">A rep prepares a fifteen minute meeting with a chief medical officer by hand: Salesforce notes, a vendor market file, CMS volumes, recent publications, FDA labelling. Hours of assembly for one conversation, and the assembly is thrown away afterwards.</p>
+
+  <div class="body cols-58">
+    <div class="col">
+      <ul class="qlist">
+        <li><span class="k">Who</span><span class="v">Which physicians see patients that Tempus's <b>specific</b> panels fit, rather than which ones simply see the most patients?</span></li>
+        <li><span class="k">Why now</span><span class="v">What changed this month that makes this call timely, and can I point at the dated source that changed?</span></li>
+        <li><span class="k">What I say</span><span class="v">An opener and an objection answer that are tailored, specific, and true.</span></li>
+      </ul>
+
+      <div class="thesis">
+        <p class="hd">Everyone builds a generator. The hard part is the verifier.</p>
+        <p>Drafting a pitch is one model call. Knowing whether the pitch is <b>true</b> before a rep says a performance number to a chief medical officer, at a company operating under FDA labelling, is the part that has to be engineered. A confident wrong number costs more than a bland pitch.</p>
+      </div>
+
+      <p class="foot"><b>Scope.</b> Decision support for call preparation. Not a clinical recommendation, not a prediction of physician quality, and never spoken without a person reviewing it first.</p>
+    </div>
+
+    <div class="col">
+      <figure>
+        <div class="shot" data-slot="Slide 1 image&#10;assets/territory.png">
+          <img src="assets/territory.png" alt="Territory explorer showing 60 of 60 providers mapped across 29 locations in Chicago, with a priority queue ranked by impact." onerror="this.parentNode.classList.add('missing')">
+        </div>
+        <figcaption>431 physicians resolved in the live Chicago market. 60 enter the bounded working set, ranked by impact, 12 flagged for verification.</figcaption>
+      </figure>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 02 ============================ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">02</span> The product</div>
+  <h1>One screen: who to call, why now, and what to say.</h1>
+  <p class="sub">The three outputs the brief asks for are not three features. They are one dossier a rep opens on the way into the building.</p>
+
+  <div class="body cols-64">
+    <div class="col">
+      <figure>
+        <div class="shot contain" data-slot="Slide 2 image&#10;assets/dossier.png">
+          <img src="assets/dossier.png" alt="Provider dossier for Manik Amin MD showing priority score 83, why now triggers, a thirty second opener, and expected pushback on turnaround time." onerror="this.parentNode.classList.add('missing')">
+        </div>
+        <figcaption>Live Chicago data. Priority 83, ten sources cited, one contested field, three claims verified.</figcaption>
+      </figure>
+    </div>
+
+    <div class="col">
+      <ul class="calls">
+        <li><span class="k">Ranked provider list</span><span class="v">Ordered by estimated eligible patient impact, not by headcount. Also rolled up to accounts, because a chief medical officer buys for a site: 60 physicians become 20 accounts, consolidating 19 UChicago oncologists into one conversation.</span></li>
+        <li><span class="k">Why now</span><span class="v">Dated events that decay, each linking its own source. A physician's own December paper outranks a market wide FDA action.</span></li>
+        <li><span class="k">The meeting script</span><span class="v">A thirty second opener assembled only from claims that cited evidence and survived every gate.</span></li>
+        <li><span class="k">The objection handler</span><span class="v">"Turnaround time" answered with approximately nine days for xT, quoted from Tempus's FY2025 Form 10-K. Pricing has no approved source, so it is refused.</span></li>
+      </ul>
+
+      <p class="foot"><span class="flag">Verify before calling</span> &nbsp; <b>NPPES</b> says Internal Medicine, Medical Oncology. <b>CMS</b> says Hematology-Oncology. The conflict lowers confidence instead of being resolved silently behind the rep.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 03 ============================ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">03</span> Ranking and explainability</div>
+  <h1>A transparent weighted score, because there is no conversion history to learn from.</h1>
+
+  <div class="body cols-58" style="margin-top:1.9cqw">
+    <div class="col">
+      <div class="pipe">
+        <div class="step"><span class="t">Ingest</span><span class="d">Market CSV, Markdown KB, CRM text. Each has its own parser; nothing about a physician is hard-coded.</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="step"><span class="t">Enrich</span><span class="d">NPPES, CMS Utilization, CMS Open Payments, ClinicalTrials.gov, PubMed.</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="step"><span class="t">Resolve</span><span class="d">NPI anchor, Jaro-Winkler 0.88 floor on names, cross-source consensus.</span></div>
+        <span class="arrow">&rarr;</span>
+        <div class="step"><span class="t">Score</span><span class="d">Six weighted signals, with a sensitivity pass on each.</span></div>
+      </div>
+
+      <div>
+        <div class="weights">
+          <span style="width:32%;background:var(--accent)"></span>
+          <span style="width:20%;background:color-mix(in srgb,var(--accent) 68%,var(--card))"></span>
+          <span style="width:17%;background:color-mix(in srgb,var(--accent) 46%,var(--card))"></span>
+          <span style="width:13%;background:var(--amber)"></span>
+          <span style="width:10%;background:color-mix(in srgb,var(--amber) 55%,var(--card))"></span>
+          <span style="width:8%;background:var(--ink-3)"></span>
+        </div>
+        <ul class="wkey">
+          <li><i style="background:var(--accent)"></i><b>32%</b> patient opportunity</li>
+          <li><i style="background:color-mix(in srgb,var(--accent) 68%,var(--card))"></i><b>20%</b> identity confidence</li>
+          <li><i style="background:color-mix(in srgb,var(--accent) 46%,var(--card))"></i><b>17%</b> panel fit</li>
+          <li><i style="background:var(--amber)"></i><b>13%</b> CRM engagement</li>
+          <li><i style="background:color-mix(in srgb,var(--amber) 55%,var(--card))"></i><b>10%</b> record freshness</li>
+          <li><i style="background:var(--ink-3)"></i><b>8%</b> market trial density</li>
+        </ul>
+      </div>
+
+      <ul class="notes">
+        <li><b>Panel fit scores match rate</b>, indication fit multiplied by likelihood of testing, not volume. Patient count is already the opportunity term; multiplying it in twice would quietly turn the ranking into a headcount sort.</li>
+        <li><b>Identity confidence is a ranking input at 20%</b>, so a provider we cannot resolve across sources cannot out-rank one we can. The cross-validator is load-bearing, not decorative.</li>
+        <li><b>Sensitivity analysis</b> shows where a provider would rank if a signal were unavailable, so "why is this one third" has an answer rather than a bar chart.</li>
+      </ul>
+      <p class="foot"><b>Panel fit also names the panel.</b> A colorectal-heavy practice routes to xT CDx on the KRAS companion diagnostic indication. A practice whose tissue is frequently inadequate routes to xF. A predominantly haematologic practice is marked <b>limited fit</b>, because xT CDx's labelled intended use is solid malignant neoplasms.</p>
+    </div>
+
+    <div class="col">
+      <figure>
+        <div class="shot" data-slot="Slide 3 image&#10;assets/table.png">
+          <img src="assets/table.png" alt="Ranked doctor comparison table showing priority, opportunity signal, weighted drivers, estimated patients, panel fit and recommended panel per physician." onerror="this.parentNode.classList.add('missing')">
+        </div>
+        <figcaption>Every ranked row shows its weighted drivers and the panel it routes to, next to the CMS and trial evidence behind them.</figcaption>
+      </figure>
+      <p class="foot"><b>Why not a model?</b> There is no real Tempus conversion history to train on. A learned ranker on simulated labels would manufacture false precision. Phase 2 adds a logistic model in shadow mode with explicit promotion criteria: 40 genuine outcomes, held-out precision@5, calibration review.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 04 ============================ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">04</span> Prompts, gates and validation</div>
+  <h1>Every generated sentence names its evidence and passes four gates.</h1>
+
+  <div class="body cols-11" style="margin-top:1.9cqw">
+    <div class="col">
+      <pre><span class="c">// generation system prompt, abbreviated</span>
+You draft sales copy for a regulated medical
+diagnostics company.
+<span class="hi">- You may ONLY assert what the supplied EVIDENCE states.</span>
+<span class="hi">- Every claim must cite at least one evidence id.</span>
+<span class="hi">- Never state a number that does not appear verbatim</span>
+<span class="hi">  in the evidence you cite.</span>
+- If the evidence does not support a point, omit it.
+  Do not hedge, do not approximate.
+Respond ONLY with JSON:
+{"claims":[{"text":"&lt;one sentence&gt;","evidenceIds":[...]}]}</pre>
+      <p class="codecap"><b>The model never writes prose the user sees.</b> It emits structured claims that each name their evidence, and the final copy is assembled from the claims that survive. You cannot check a paragraph. You can check a sentence that cites its sources.</p>
+
+      <pre><span class="c">// gate 4 auditor prompt, abbreviated</span>
+You are a strict evidence auditor for a regulated
+medical diagnostics company.
+<span class="hi">Do not use outside knowledge. Do not be charitable.</span>
+{"verdict":"supported"|"partial"|"unsupported"}</pre>
+      <p class="codecap"><b>Gemini 2.0 Flash drafts, Llama 3.3 70B on Groq audits</b>, blind to the generation prompt. A model grading its own output is not a check.</p>
+    </div>
+
+    <div class="col">
+      <table class="gates">
+        <thead><tr><th></th><th>Gate</th><th>Runs</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><span class="g">Input screen</span>Prompt injection and PHI in untrusted CRM text, screened <b>before the prompt is built</b>.</td><td class="when">always</td></tr>
+          <tr><td>2</td><td><span class="g">Evidence grade</span>A claim inherits its weakest citation. Grade-D inference is refused.</td><td class="when">always</td></tr>
+          <tr><td>3</td><td><span class="g">Numeric guard</span>Deterministic, no model call. Every number must appear verbatim in cited evidence.</td><td class="when">always</td></tr>
+          <tr><td>4</td><td><span class="g">Cross-model entailment</span>A different model, blind to the generation prompt, re-checks each claim. Reports <b>skipped</b>, never silently passing, if a second provider is absent.</td><td class="when">2 providers</td></tr>
+        </tbody>
+      </table>
+
+      <div class="metrics">
+        <div><span class="n pass">101/101</span><span class="l">golden and adversarial cases passing. <code>npm run verify</code> exits non-zero, so it gates CI.</span></div>
+        <div><span class="n">22</span><span class="l">bugs the suite found in live data. Three of them:</span></div>
+      </div>
+
+      <ul class="notes" style="font-size:.98cqw">
+        <li><b>Trial counts were page sizes.</b> A 40-row page length was reported as the market total. Chicago actually has 751 recruiting cancer trials.</li>
+        <li><b>The territory was an alphabetical page.</b> A <code>limit=20</code> query returned 11 physicians whose surnames all began with A, and a single taxonomy filter excluded 172 of 430.</li>
+        <li><b>Gate 1 ran after the model call.</b> A poisoned note was withheld from the rep, but had already reached the generator.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<!-- ============================ 05 ============================ -->
+<section class="slide">
+  <div class="eyebrow"><span class="num">05</span> Assumptions and limits</div>
+  <h1>What I assumed, and what I would not let it claim.</h1>
+
+  <div class="body cols-11" style="margin-top:1.9cqw">
+    <div class="col">
+      <div class="hd2 a">Assumptions I am making</div>
+      <ul class="tight">
+        <li>The vendor CSV is a <b>modelled estimate</b> of annual oncology patients and tumour mix, not observed counts. It is treated as the least trusted source and cross-checked, because a stale panel file is what sends a rep to the wrong building.</li>
+        <li>Recent CRM contact indicates readiness, NPPES update recency indicates record quality, and cross-source agreement indicates the right physician was found.</li>
+        <li>The <b>weights are product assumptions</b>, not values learned from Tempus outcomes. Opportunity leads because patient impact is the brief's objective; identity and freshness are there to lower the cost of acting on a bad record.</li>
+        <li>Panel-fit rules, such as colorectal volume routing to xT CDx or inadequate tissue routing to xF, are <b>call-planning heuristics, not clinical guidance</b>.</li>
+        <li>A bounded 60 doctor working set is sufficient for a prototype. Market size and working set are always reported as separate numbers so a cost bound cannot be read as a territory size.</li>
+      </ul>
+      <p class="foot"><b>Every assumption above is visible in the interface, not buried in the code.</b> An estimate is labelled an estimate, a contested field names the sources that disagree, and a number we do not have reads <b>Unavailable</b> rather than zero.</p>
+    </div>
+
+    <div class="col">
+      <div class="hd2 b">Limits I would not paper over</div>
+      <ul class="tight">
+        <li>CMS utilization is annual, covers Original Medicare fee-for-service only, and suppresses counts below 11.</li>
+        <li>Market trial density is city-level and identical for every provider in a market. It carries 8% of the weight for that reason and is labelled as market-level in the interface.</li>
+        <li>ClinicalTrials.gov publishes no NPI for site staff, so a facility link is capped at 0.55 confidence and never presented as participation.</li>
+        <li><b>Pricing remains a declared gap.</b> No approved source states it, so the objection handler refuses, pivots to the strongest supported evidence, and hands the rep a discovery question.</li>
+        <li>Missing information stays visible and lowers confidence rather than being invented, and every generated line still needs a person to read it before it is said aloud.</li>
+      </ul>
+
+      <dl class="access" style="margin-top:auto">
+        <dt>Run it</dt><dd><code>npm install &amp;&amp; npm run dev</code> at <code>github.com/macali24/Tempus</code>. No API key required: without model credentials the deterministic assembler runs and gate 4 reports <b>skipped</b> rather than silently passing.</dd>
+        <dt>Verify it</dt><dd><code>npm run verify</code> runs the typecheck, the 101 case golden set, the gate 4 wiring and the adversarial fixtures.</dd>
+        <dt>Built with</dt><dd>Claude Opus 5 as development assistant, React + TypeScript + Vite, Gemini and Groq free tiers. No paid tooling anywhere in the stack.</dd>
+      </dl>
+    </div>
+  </div>
+</section>
+
+</div>
