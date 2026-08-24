@@ -1,6 +1,6 @@
-# Signal — Tempus Sales Copilot prototype
+# Tempus Sales Copilot prototype
 
-A source-grounded oncology territory dashboard. Signal searches real public provider records, combines them with active local clinical-trial signals, explains its ranking, and creates a reviewable meeting opener grounded in official Tempus product information.
+A source-grounded oncology territory dashboard. Tempus searches real public provider records, combines them with active local clinical-trial signals, explains its ranking, and creates a reviewable meeting opener grounded in official Tempus product information.
 
 ## Run locally
 
@@ -16,6 +16,7 @@ Open the URL printed by Vite. Search a supported US city and state. Vite proxies
 - CMS NPPES NPI Registry API — provider identity, specialty, practice location, and record recency
 - ClinicalTrials.gov API v2 — recruiting local cancer studies
 - Mapbox Geocoding API + Mapbox GL — real provider-address coordinates and interactive territory map
+- Wikipedia REST API — optional doctor photos, shown only for exact-name medical-profile matches
 - Tempus official xT CDx product page — product capability used in the meeting brief
 
 No source records are mocked or stored in the repository. If either live API fails, the app shows an error rather than substituting fabricated data.

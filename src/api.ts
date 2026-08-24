@@ -1,4 +1,4 @@
-import type { Provider, ProviderPoint, Study } from './types';
+import type { Provider, ProviderPhoto, ProviderPoint, Study } from './types';
 
 // NPPES does not emit browser CORS headers. Vite proxies this path in development.
 const NPI_API = '/api/npi';
@@ -38,4 +38,25 @@ export async function geocodeProviders(providers: Provider[]): Promise<ProviderP
     return coordinates ? { npi: provider.number, longitude: coordinates[0], latitude: coordinates[1] } : null;
   }));
   return points.filter((point): point is ProviderPoint => Boolean(point));
+}
+
+export async function fetchVerifiedPhotos(providers: Provider[]): Promise<Record<string, ProviderPhoto>> {
+  const entries = await Promise.all(providers.slice(0, 10).map(async provider => {
+    const fullName = `${provider.basic.first_name ?? ''} ${provider.basic.last_name ?? ''}`.trim();
+    if (!fullName) return null;
+    try {
+      const response = await fetch(`https://en.wikipedia.org/w/rest.php/v1/search/page?q=${encodeURIComponent(`${fullName} oncologist`)}&limit=5`);
+      if (!response.ok) return null;
+      const pages = (await response.json()).pages ?? [];
+      const exact = pages.find((page: { title?: string; description?: string; thumbnail?: { url?: string } }) =>
+        page.title?.replaceAll('_',' ').toLowerCase() === fullName.toLowerCase() &&
+        /oncolog|physician|doctor|medical|cancer/i.test(page.description ?? '') && page.thumbnail?.url);
+      if (!exact) return null;
+      const url = exact.thumbnail.url.startsWith('//') ? `https:${exact.thumbnail.url}` : exact.thumbnail.url;
+      return [provider.number, { url: url.replace(/\/\d+px-/, '/240px-'), sourceUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(exact.title)}` }] as const;
+    } catch { return null; }
+  }));
+  const photos: Record<string, ProviderPhoto> = {};
+  entries.forEach(entry => { if (entry) photos[entry[0]] = entry[1]; });
+  return photos;
 }

@@ -17,3 +17,4 @@ export type Study = {
 export type RankedProvider = Provider & { score: number; exactFit: number; trialSignal: number; recency: number; cityTrials: Study[] };
 
 export type ProviderPoint = { npi: string; longitude: number; latitude: number };
+export type ProviderPhoto = { url: string; sourceUrl: string };
