@@ -28,6 +28,8 @@ export function App() {
   const [selectedNpi,setSelectedNpi] = useState(''); const [loading,setLoading] = useState(true); const [error,setError] = useState('');
   const ranked = useMemo(() => providers.map(p=>rank(p,trials)).sort((a,b)=>b.score-a.score),[providers,trials]);
   const selected = ranked.find(p=>p.number===selectedNpi) ?? ranked[0];
+  const hour = new Date().getHours();
+  const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening';
 
   async function load(){
     setLoading(true); setError(''); setPoints([]); setPhotos({});
@@ -42,9 +44,9 @@ export function App() {
   }
   useEffect(()=>{load()},[query]);
   return <div className="shell">
-    <header className="topbar"><div className="logo"><img src="/tempus-mark.png" alt="Tempus"/><span>tempus</span></div><div className="source-status"><i/> Live public data <b>•</b> NPPES + ClinicalTrials.gov</div><div className="account"><span>John Doe<small>Territory manager</small></span><div className="user">JD</div></div></header>
+    <header className="topbar"><div className="logo"><img src="/tempus-mark.png" alt="Tempus"/><span>tempus</span></div><div className="account"><span>John Doe<small>Territory manager</small></span><div className="user">JD</div></div></header>
     <main>
-      <section className="hero"><div><span className="kicker">Territory workspace</span><h1>Find the right conversation.</h1><p>Real provider and clinical-trial signals, distilled into one clear next step.</p></div>
+      <section className="hero"><div><h1>{greeting}, John.</h1><p>{loading ? `Loading ${query.city} territory…` : <><strong>{ranked.length}</strong> oncology providers · <strong>{trials.length}</strong> recruiting trials · top priority <strong>{ranked[0]?.score ?? 0}/100</strong></>}</p></div>
         <form className="search" onSubmit={e=>{e.preventDefault();setQuery({city:city.trim(),state})}}><Search/><input aria-label="City" value={city} onChange={e=>setCity(e.target.value)} /><div><select aria-label="State" value={state} onChange={e=>setState(e.target.value)}>{Object.entries(states).map(([v,l])=><option value={v} key={v}>{l}</option>)}</select><ChevronDown/></div><button>Search market</button></form>
       </section>
       {error ? <div className="error"><CircleAlert/><div><b>Couldn’t load this market</b><span>{error}</span></div><button onClick={load}>Try again</button></div> : <>
