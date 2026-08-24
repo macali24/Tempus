@@ -17,6 +17,7 @@ Open the URL printed by Vite. Search a supported US city and state. Vite proxies
 - ClinicalTrials.gov API v2 — recruiting local cancer studies
 - Mapbox Geocoding API + Mapbox GL — real provider-address coordinates and interactive territory map
 - Wikidata SPARQL API — optional doctor photos, shown only when Wikidata property P9450 exactly matches the CMS NPI
+- Audited official-profile registry — a small NPI-keyed fallback for headshots verified against hospital or university profiles
 - Tempus official xT CDx product page — product capability used in the meeting brief
 
 No source records are mocked or stored in the repository. If either live API fails, the app shows an error rather than substituting fabricated data.

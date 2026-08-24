@@ -46,7 +46,22 @@ export async function geocodeProviders(providers: Provider[]): Promise<ProviderP
 }
 
 export async function fetchVerifiedPhotos(providers: Provider[]): Promise<Record<string, ProviderPhoto>> {
-  const photos: Record<string, ProviderPhoto> = {};
+  const audited: Record<string, ProviderPhoto> = {
+    '1265689889': {
+      url: 'https://edge.sitecorecloud.io/unichicagomc-81nbqnb3/media/images/ucmc/physician-photos/a-c/amin-manik-bio-261x347.jpg',
+      sourceUrl: 'https://www.uchicagomedicine.org/find-a-physician/physician/manik-amin',
+    },
+    '1588184956': {
+      url: 'https://www.nm.org/image/doctor/NPI/1588184956.jpg',
+      sourceUrl: 'https://www.cancer.northwestern.edu/find-a-physician/profile.html?xid=64440',
+    },
+    '1033548383': {
+      url: 'https://www.nm.org/image/doctor/NPI/1033548383.jpg',
+      sourceUrl: 'https://www.nm.org/doctors/1033548383/yasmin-abaza-md',
+    },
+  };
+  const providerNpis = new Set(providers.map(provider => provider.number));
+  const photos: Record<string, ProviderPhoto> = Object.fromEntries(Object.entries(audited).filter(([npi]) => providerNpis.has(npi)));
   const npis = providers.slice(0, 10).map(provider => `"${provider.number}"`).join(' ');
   if (!npis) return photos;
   const sparql = `SELECT ?npi ?item ?image WHERE { VALUES ?npi { ${npis} } ?item wdt:P9450 ?npi; wdt:P18 ?image. }`;
@@ -57,7 +72,7 @@ export async function fetchVerifiedPhotos(providers: Provider[]): Promise<Record
     const bindings = (await response.json()).results?.bindings ?? [];
     bindings.forEach((binding: { npi?: { value?: string }; item?: { value?: string }; image?: { value?: string } }) => {
       const npi = binding.npi?.value; const image = binding.image?.value; const item = binding.item?.value;
-      if (npi && image && item) photos[npi] = { url: image, sourceUrl: item };
+      if (npi && image && item && !photos[npi]) photos[npi] = { url: image, sourceUrl: item };
     });
   } catch { return photos; }
   return photos;
