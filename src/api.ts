@@ -10,8 +10,13 @@ export async function fetchProviders(city: string, state: string): Promise<Provi
   const response = await fetch(`${NPI_API}?${q}`);
   if (!response.ok) throw new Error(`NPI Registry returned ${response.status}`);
   const data = await response.json();
-  if (!data.results?.length) throw new Error('No oncology providers found for this market. Try a nearby city.');
-  return data.results;
+  const results: Provider[] = data.results ?? [];
+  const exactMarket = results.filter(provider => {
+    const location = provider.addresses.find(address => address.address_purpose === 'LOCATION') ?? provider.addresses[0];
+    return provider.basic.status === 'A' && location?.city?.toLowerCase() === city.trim().toLowerCase() && location?.state === state;
+  });
+  if (!exactMarket.length) throw new Error('No active oncology providers with an exact practice-location match were found. Try a nearby city.');
+  return exactMarket;
 }
 
 export async function fetchTrials(city: string, state: string): Promise<Study[]> {
@@ -41,22 +46,19 @@ export async function geocodeProviders(providers: Provider[]): Promise<ProviderP
 }
 
 export async function fetchVerifiedPhotos(providers: Provider[]): Promise<Record<string, ProviderPhoto>> {
-  const entries = await Promise.all(providers.slice(0, 10).map(async provider => {
-    const fullName = `${provider.basic.first_name ?? ''} ${provider.basic.last_name ?? ''}`.trim();
-    if (!fullName) return null;
-    try {
-      const response = await fetch(`https://en.wikipedia.org/w/rest.php/v1/search/page?q=${encodeURIComponent(`${fullName} oncologist`)}&limit=5`);
-      if (!response.ok) return null;
-      const pages = (await response.json()).pages ?? [];
-      const exact = pages.find((page: { title?: string; description?: string; thumbnail?: { url?: string } }) =>
-        page.title?.replaceAll('_',' ').toLowerCase() === fullName.toLowerCase() &&
-        /oncolog|physician|doctor|medical|cancer/i.test(page.description ?? '') && page.thumbnail?.url);
-      if (!exact) return null;
-      const url = exact.thumbnail.url.startsWith('//') ? `https:${exact.thumbnail.url}` : exact.thumbnail.url;
-      return [provider.number, { url: url.replace(/\/\d+px-/, '/240px-'), sourceUrl: `https://en.wikipedia.org/wiki/${encodeURIComponent(exact.title)}` }] as const;
-    } catch { return null; }
-  }));
   const photos: Record<string, ProviderPhoto> = {};
-  entries.forEach(entry => { if (entry) photos[entry[0]] = entry[1]; });
+  const npis = providers.slice(0, 10).map(provider => `"${provider.number}"`).join(' ');
+  if (!npis) return photos;
+  const sparql = `SELECT ?npi ?item ?image WHERE { VALUES ?npi { ${npis} } ?item wdt:P9450 ?npi; wdt:P18 ?image. }`;
+  try {
+    const query = new URLSearchParams({ query: sparql, format: 'json' });
+    const response = await fetch(`https://query.wikidata.org/sparql?${query}`, { headers: { Accept: 'application/sparql-results+json' } });
+    if (!response.ok) return photos;
+    const bindings = (await response.json()).results?.bindings ?? [];
+    bindings.forEach((binding: { npi?: { value?: string }; item?: { value?: string }; image?: { value?: string } }) => {
+      const npi = binding.npi?.value; const image = binding.image?.value; const item = binding.item?.value;
+      if (npi && image && item) photos[npi] = { url: image, sourceUrl: item };
+    });
+  } catch { return photos; }
   return photos;
 }
