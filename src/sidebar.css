@@ -1,0 +1,13 @@
+/* Keep the map sharp and interactive while the provider sidebar is open. */
+.drawer-backdrop {
+  background: transparent;
+  backdrop-filter: none;
+  pointer-events: none;
+  animation: none;
+}
+
+.provider-drawer {
+  border-left: 1px solid #e5e6ec;
+  box-shadow: -16px 0 45px #171b2a16;
+  pointer-events: auto;
+}
