@@ -23,21 +23,19 @@ export async function fetchTrials(city: string, state: string): Promise<Study[]>
 }
 
 export async function geocodeProviders(providers: Provider[]): Promise<ProviderPoint[]> {
-  const unique = new Map<string, Provider>();
-  providers.slice(0, 10).forEach(p => {
-    const a = p.addresses.find(x => x.address_purpose === 'LOCATION') ?? p.addresses[0];
-    if (a) unique.set(`${a.address_1}|${a.city}|${a.state}|${a.postal_code}`, p);
-  });
-  const points = await Promise.all([...unique.entries()].map(async ([key, provider]) => {
+  const coordinateCache = new Map<string, Promise<[number, number] | null>>();
+  const points = await Promise.all(providers.slice(0, 10).map(async provider => {
+    const a = provider.addresses.find(x => x.address_purpose === 'LOCATION') ?? provider.addresses[0];
+    if (!a) return null;
+    const key = `${a.address_1}|${a.city}|${a.state}|${a.postal_code}`;
     const [street, city, state, postal] = key.split('|');
-    const q = new URLSearchParams({ q: `${street}, ${city}, ${state} ${postal}`, country: 'US', limit: '1', access_token: MAPBOX_TOKEN });
-    try {
-      const response = await fetch(`https://api.mapbox.com/search/geocode/v6/forward?${q}`);
-      if (!response.ok) return null;
-      const feature = (await response.json()).features?.[0];
-      const coordinates = feature?.geometry?.coordinates;
-      return coordinates ? { npi: provider.number, longitude: coordinates[0], latitude: coordinates[1] } : null;
-    } catch { return null; }
+    if (!coordinateCache.has(key)) coordinateCache.set(key, (async () => {
+      const q = new URLSearchParams({ q: `${street}, ${city}, ${state} ${postal}`, country: 'US', limit: '1', access_token: MAPBOX_TOKEN });
+      try { const response = await fetch(`https://api.mapbox.com/search/geocode/v6/forward?${q}`); if (!response.ok) return null; return (await response.json()).features?.[0]?.geometry?.coordinates ?? null; }
+      catch { return null; }
+    })());
+    const coordinates = await coordinateCache.get(key)!;
+    return coordinates ? { npi: provider.number, longitude: coordinates[0], latitude: coordinates[1] } : null;
   }));
   return points.filter((point): point is ProviderPoint => Boolean(point));
 }

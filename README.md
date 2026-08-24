@@ -26,6 +26,8 @@ No source records are mocked or stored in the repository. If either live API fai
 
 This prototype intentionally does not claim patient volume, prescribing behavior, CRM sentiment, or institutional affiliation because those fields are not supported by the public APIs.
 
+Map tools include provider fly-to and evidence popups, reset-to-territory, user geolocation, fullscreen mode, zoom, pitch, and rotation. These use Mapbox GL's free client controls and require no additional paid tooling.
+
 ## Important limitation
 
 This is a take-home prototype for sales decision support, not clinical use. Generated meeting language must be reviewed by a person before use.
